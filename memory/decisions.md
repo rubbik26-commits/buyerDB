@@ -31,6 +31,18 @@ else blocks on it.
 Needs the user's Render account to connect the repo; assistant verifies `/api/health` and
 flips Netlify's `VITE_API_URL` afterward. Data tabs stay on Supabase RPC mode meanwhile.
 
+**D-008 — Daily refresh is Supabase-native (Base44 → skyline-sync), NOT GitHub Actions (2026-07-06).**
+The user's operating stack (Netlify + Supabase + Base44, pg_cron already green daily)
+was discovered live; a sync bridge respects it instead of forcing the GitHub worker
+path. D-007's Render plan and the `DATABASE_URL` GitHub secret become optional/legacy —
+only needed if the curl_cffi scraper or FastAPI features (uploads, AI Deal Desk) are
+wanted later. *Why:* reliability over rebuilding; zero user-side steps; the invariants
+move into one SQL write path (`sync_upsert_deals`).
+
+**D-009 — Sync secrets live in `app_config` (RLS'd table), not in function source.**
+Older dealflow functions hardcode the Base44 key (pre-existing debt, rotation SOP'd);
+the new path reads config at runtime so rotation is a single UPDATE.
+
 **D-004 — Existing repo invariants adopted as provisional Behavioral Rules in CLAUDE.md.**
 Amount gate, no-residential, never-overwrite-non-null, flagged-not-resolved conflicts,
 no fabricated contacts, no contact data to trainable free tiers.

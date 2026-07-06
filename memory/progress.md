@@ -27,7 +27,35 @@ live URL full-stack payload / keep all seven invariants. Recorded in CLAUDE.md.
 | FastAPI backend host | — | ❌ **not deployed** (no Render/Railway credentials). Data tabs unaffected; uploads / entity merges / AI Deal Desk offline until deployed. `render.yaml` exists at repo root. |
 | AI provider keys | — | ⬜ none provided (optional; app degrades honestly) |
 
-## Blocked on (user) — decisions taken 2026-07-06
+## 2026-07-06 (late) — TRUE ARCHITECTURE DISCOVERED; refresh loop closed end-to-end
+
+User pushback ("we deployed on Netlify not render") led to checking Netlify env vars
+and the Supabase project's edge functions. Findings, then the build:
+
+1. User HAD saved credentials — 9 Supabase env vars on the Netlify buyerdb site
+   (19:05 UTC, via the Supabase extension). My earlier "secret missing" framing was
+   about the wrong machine: GitHub runners never see Netlify's vault.
+2. A full **dealflow pipeline already runs Supabase-native**: pg_cron (7 jobs, green
+   daily for days) → edge functions (acris-v2, traded-daily, crexi-*, pipeline-reconcile,
+   dos-enrich, llm-enrich) → **Base44 app entities** (4,358 deals, 33 new this month).
+3. THE GAP: the live site reads Supabase `deals` (one-time CSV load); fresh deals landed
+   only in Base44 → the site would silently go stale.
+4. BUILT + DEPLOYED the bridge: migrations skyline_005/006 (`app_config`, `sync_state`,
+   `sync_upsert_deals()`), edge function `skyline-sync` (v3), pg_cron job
+   `skyline-sync-daily` @ 07:40 UTC.
+5. Self-annealing incident: first run created 143 dup deals (junk-date rows bypassing
+   addr+price+date dedupe). Fixed in both layers (client date normalization + SQL
+   unknown-date dup rule), deleted 126 residual dups, re-verified.
+6. FINAL VERIFIED STATE: deals 4,099 → **4,533** (+434 net new), 0 duplicate
+   (property,price,date) groups, newest post_date = today, 15 contacts with provenance,
+   sync idempotent (two consecutive runs: inserted 0, errors 0), live `api_health`
+   agrees: 4,533. Tests run: staged 500-row sync, 2× full sync, idempotency re-run,
+   whole-table dup scan.
+7. GitHub Actions worker path reclassified LEGACY (not needed for refresh); temporary
+   diag-secrets workflow removed from ACRIS. ⚠️ Security debt logged: hardcoded Base44
+   key in older edge functions — rotation steps in SOP-daily-refresh.md.
+
+## Superseded — earlier blockers (kept for history)
 1. `DATABASE_URL` repo secret: **user will add it later** (runbook:
    `/architecture/SOP-deploy-links.md`). Crons red until then.
 2. Backend host: **Render chosen**; user must connect the repo in the Render

@@ -11,10 +11,10 @@ Living memory lives in `/memory/` — read `task_plan.md`, `findings.md`, `progr
 |---|---|---|
 | 0 — Initialization | ✅ 2026-07-06 | memory + constitution + skeleton committed |
 | B — Blueprint | ✅ 2026-07-06 | 5 discovery answers recorded below; Payload shape confirmed |
-| L — Link | 🟡 5/7 GREEN | Supabase (loaded!), Netlify (live), Socrata, CI, deploy-frontend ✅ · worker crons ❌ (no `DATABASE_URL` secret) · backend host ❌ (not provisioned) — see `/memory/progress.md` |
-| A — Architect | ⬜ not started | — |
-| S — Stylize | ⬜ not started | — |
-| T — Trigger | ⬜ not started | — |
+| L — Link | ✅ 2026-07-06 | All payload-critical links green: Supabase, Netlify, Base44, Socrata, pg_cron. GitHub-Actions worker path reclassified LEGACY (see SOP-daily-refresh) |
+| A — Architect | ✅ 2026-07-06 | `sync_upsert_deals()` (migrations 005/006) + `skyline-sync` edge fn; SOPs in `/architecture/` |
+| S — Stylize | ✅ (pre-existing) | payload = the live app; four tabs already styled and serving |
+| T — Trigger | ✅ 2026-07-06 | pg_cron job `skyline-sync-daily` 07:40 UTC armed & verified; full trigger map in SOP-daily-refresh.md |
 
 **Protocol 0 halt lifted 2026-07-06:** all five discovery questions answered by the user,
 Payload shape confirmed below, Blueprint approved in `task_plan.md`. `/execution/` may now
@@ -117,10 +117,16 @@ every field below is real and verified:
   4. *Delivery Payload:* live public URL, full stack (shape above).
   5. *Behavioral Rules:* all seven repo invariants adopted unchanged; agent tone is
      professional broker-grade, cites sources, answers "no data" rather than guessing.
-- **L — Link (🟡 2026-07-06):** database + frontend + data-tab pipeline fully live —
-  buyerdb.netlify.app → Supabase RPC → 4,099 deals. Probe: `execution/probe_links.sh`.
-  Red links (user credentials required): worker `DATABASE_URL` secret; backend host.
-  Full table in `/memory/progress.md`.
+- **L — Link (✅ 2026-07-06):** operating architecture is **Netlify + Supabase + Base44**:
+  pg_cron → dealflow edge functions → Base44; site reads Supabase via PostgREST RPC.
+  The gap (fresh deals stranded in Base44) is closed by `skyline-sync`. GitHub-Actions
+  Python worker = legacy fallback, not required. Probe: `execution/probe_links.sh`.
+- **A — Architect (✅ 2026-07-06):** single write path `sync_upsert_deals()` (migrations
+  005/006) enforces all invariants in SQL; the edge function is transport only.
+  SOP: `/architecture/SOP-daily-refresh.md`.
+- **T — Trigger (✅ 2026-07-06):** pg_cron `skyline-sync-daily` (`40 7 * * *` UTC) after
+  the dealflow train; secret read from `app_config` at fire time. Verified: +434 net-new
+  deals (4,099 → 4,533), idempotent re-run, 0 duplicate groups.
 - **A — Architect:** *(pending)*
 - **S — Stylize:** *(pending)*
 - **T — Trigger:** *(pending — triggers documented here when armed; existing GitHub Actions
