@@ -1,0 +1,49 @@
+name: deploy-frontend
+
+# Builds the static frontend and publishes it to GitHub Pages at
+# https://rubbik26-commits.github.io/buyerDB/
+# The build points VITE_API_URL at the Supabase project, so the client runs in
+# RPC mode (PostgREST api_* functions from migration 004) — no separate backend
+# host needed for the data tabs. When the FastAPI backend is deployed later,
+# change VITE_API_URL to its URL and the same client switches to full mode.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ACRIS]
+    paths: ["skyline/frontend/**", ".github/workflows/deploy-frontend.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build (RPC mode, served under /buyerDB/)
+        working-directory: skyline/frontend
+        env:
+          VITE_API_URL: https://hvsvxjdwfbsqaqlmuwlt.supabase.co
+        run: |
+          npm ci
+          npx vite build --base=/buyerDB/
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: skyline/frontend/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
