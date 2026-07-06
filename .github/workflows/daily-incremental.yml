@@ -28,6 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Require DATABASE_URL secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::The DATABASE_URL repo secret is not set. Add it under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard (Connect button) — the direct db.*.supabase.co host is IPv6-only and unreachable from Actions runners."
+            exit 1
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
