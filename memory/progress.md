@@ -27,7 +27,16 @@ live URL full-stack payload / keep all seven invariants. Recorded in CLAUDE.md.
 | FastAPI backend host | — | ❌ **not deployed** (no Render/Railway credentials). Data tabs unaffected; uploads / entity merges / AI Deal Desk offline until deployed. `render.yaml` exists at repo root. |
 | AI provider keys | — | ⬜ none provided (optional; app degrades honestly) |
 
-## Blocked on (user)
-1. Set the `DATABASE_URL` repo secret (Supabase session pooler string) so the worker crons go green.
-2. Backend host decision + credentials (Render/Railway/Fly) for the FastAPI layer.
-3. Optional: AI provider key(s), Socrata app token, alert webhook.
+## Blocked on (user) — decisions taken 2026-07-06
+1. `DATABASE_URL` repo secret: **user will add it later** (runbook:
+   `/architecture/SOP-deploy-links.md`). Crons red until then.
+2. Backend host: **Render chosen**; user must connect the repo in the Render
+   dashboard (render.yaml is ready). Assistant then verifies `/api/health` and
+   sets Netlify `VITE_API_URL`.
+3. Optional keys (AI providers, Socrata token, alert webhook) — whenever available.
+
+## Environment note
+Live-site screenshot verification is blocked in this container: Playwright's Chromium
+cannot trust the egress proxy's CA (no certutil/NSS store available, apt install fails).
+Payload verified instead via HTTP probes: site 200, bundle confirmed RPC-mode,
+`api_health` → 4,099 deals. Capture the screenshot at final Phase S sign-off.

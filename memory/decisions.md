@@ -19,6 +19,18 @@ discovery still runs: the user's North Star for *buyerDB* may extend or diverge 
 *Why:* memory must survive container recycling (remote ephemeral environment); intermediates must not
 pollute the repo.
 
+**D-005 — Blueprint answers (user, via interactive prompts, 2026-07-06).**
+North Star = deploy Skyline live full-stack; Supabase Postgres canonical; payload = live
+public URL with health checks + green cron; all seven invariants kept unchanged.
+
+**D-006 — Worker `DATABASE_URL` secret: user will add it later themselves.**
+Runbook written in `/architecture/SOP-deploy-links.md`. Crons stay red until then; nothing
+else blocks on it.
+
+**D-007 — Backend host = Render (user choice), via the existing `render.yaml` blueprint.**
+Needs the user's Render account to connect the repo; assistant verifies `/api/health` and
+flips Netlify's `VITE_API_URL` afterward. Data tabs stay on Supabase RPC mode meanwhile.
+
 **D-004 — Existing repo invariants adopted as provisional Behavioral Rules in CLAUDE.md.**
 Amount gate, no-residential, never-overwrite-non-null, flagged-not-resolved conflicts,
 no fabricated contacts, no contact data to trainable free tiers.

@@ -20,14 +20,14 @@
 - [x] Data Schema (Input + Output) confirmed in CLAUDE.md
 - [x] Research logged in `/memory/findings.md`
 
-## Phase L — Link (Connectivity)  ← CURRENT
-- [ ] Supabase: list/inspect (or create) project; apply 4 migrations; verify with SQL probe
-- [ ] Netlify: verify account/site access via MCP reader
-- [ ] GitHub Actions: confirm workflows present + secrets list needed for worker
-- [ ] Socrata (ACRIS/PLUTO): unauthenticated probe from `/execution/probe_socrata.py`
-- [ ] traded.co: reachability note (curl_cffi only proves out on the Actions runner)
-- [ ] Backend host: BLOCKED — needs user's Render/Railway credentials or host decision
-- [ ] All green links logged in progress.md; broken links halt their dependent phases
+## Phase L — Link (Connectivity)  ← CURRENT (5/7 green)
+- [x] Supabase: project "Skyline" ACTIVE_HEALTHY; migrations 001–004 applied; 4,099 deals loaded; RPC health 200
+- [x] Netlify: buyerdb.netlify.app live (200), bundle in RPC mode
+- [x] GitHub Actions: ci + deploy-frontend green
+- [x] Socrata (ACRIS): probe green (`execution/probe_links.sh`)
+- [ ] Worker crons: RED — awaiting user-set `DATABASE_URL` secret (SOP written); re-run + verify after
+- [ ] Backend on Render: awaiting user to connect repo in Render dashboard (render.yaml ready); then verify /api/health + set Netlify VITE_API_URL
+- [x] Green links logged in progress.md; red links have runbooks in /architecture/SOP-deploy-links.md
 
 ## Phase A — Architect (A.N.T.)
 - [ ] `/architecture/` SOP per subsystem (ingest, gate/merge, enrichment, agent, delivery)
