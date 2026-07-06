@@ -1,0 +1,50 @@
+name: weekly-enrichment
+
+# Sunday ~06:43 ET. Closes the 7–8 week ACRIS party-recording lag as the window
+# rolls forward: phase2 matches missing parties, apply_enrichment writes them ONLY
+# through the amount gate (|deed − price|/price ≤ 3%, or no-price + ≤60d).
+on:
+  schedule:
+    - cron: "43 11 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: skyline-enrichment
+  cancel-in-progress: false
+
+# The app lives under skyline/ in this repository.
+defaults:
+  run:
+    working-directory: skyline
+
+jobs:
+  enrichment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install worker deps
+        run: pip install -r requirements.txt
+
+      # phase2_stages.run() does legals → deed masters → match, then applies each
+      # match through apply_enrichment.apply_fill → store.apply_acris_party_fill
+      # (THE AMOUNT GATE; the acris_requires_gate DB CHECK makes bypass impossible).
+      # One Postgres-native step. Covered by worker/test_phase2_enrichment.py.
+      - name: Phase 2 enrichment — match missing parties → amount-gated fill
+        run: python -m worker.phase2_stages
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          if [ -n "$ALERT_WEBHOOK_URL" ]; then
+            curl -s -X POST "$ALERT_WEBHOOK_URL" -H 'Content-Type: application/json' \
+              -d "{\"text\":\"Skyline weekly-enrichment FAILED: run ${{ github.run_id }}\"}" || true
+          fi
+          exit 1

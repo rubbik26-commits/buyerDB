@@ -1,0 +1,76 @@
+name: daily-incremental
+
+# Runs ~09:17 ET on an odd minute (GitHub cron is best-effort; :00 is the worst slot).
+# workflow_dispatch lets you (or an external pinger) trigger it on demand.
+on:
+  schedule:
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: skyline-incremental
+  cancel-in-progress: false
+
+# The app lives under skyline/ in this repository.
+defaults:
+  run:
+    working-directory: skyline
+
+jobs:
+  incremental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+      SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}   # fallback transport only; curl_cffi is primary + free
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install worker deps
+        run: pip install -r requirements.txt
+
+      # discovery − fetch ledger → amount/exclusion/class-gated merge → ledgers,
+      # against Postgres via worker/store.py. Covered by worker/test_run_incremental.py.
+      - name: Run incremental ingest (discovery − fetch ledger → gated merge → ledgers)
+        run: python -m worker.run_incremental
+
+      # Fresh ACRIS deed window → Postgres. Ported onto store.merge_deal +
+      # store.apply_acris_party_fill (amount gate). Covered by worker/test_phase3_fresh.py.
+      - name: Fresh ACRIS window (masters → detail → pluto → build → gated merge)
+        run: python -m worker.phase3_fresh
+
+      # Rolling Sales sqft/units fill (agreement-gated, never overwrite, >20% → review,
+      # rolling_ledger dedupe). Covered by worker/test_rolling_sales.py.
+      - name: Rolling Sales batch (sqft/units fill)
+        run: python -m worker.rolling_sales --batch 400
+
+      - name: Keep-alive commit (defeats the 60-day schedule auto-disable)
+        run: |
+          git config user.name "skyline-bot"
+          git config user.email "bot@skyline.local"
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .last_incremental_run
+          git add .last_incremental_run
+          # commit only when there is a staged change; a clean tree is an expected
+          # no-op (not an error). A real push failure is NOT masked — it fails the job.
+          if git diff --staged --quiet; then
+            echo "keep-alive: nothing to commit"
+          else
+            git commit -m "chore: keep-alive $(date -u +%F)"
+            git push
+          fi
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          if [ -n "$ALERT_WEBHOOK_URL" ]; then
+            curl -s -X POST "$ALERT_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"Skyline daily-incremental FAILED: run ${{ github.run_id }}\"}" || true
+          fi
+          exit 1

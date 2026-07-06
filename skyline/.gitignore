@@ -1,0 +1,24 @@
+# secrets
+.env
+*.env
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+
+# node / frontend
+node_modules/
+frontend/dist/
+frontend/.env
+
+# os / editor
+.DS_Store
+*.log
+/tmp/
+
+# worker artifacts (legacy pickles must never be committed — ledgers live in Postgres now)
+*.pkl
