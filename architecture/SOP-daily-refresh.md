@@ -3,7 +3,45 @@
 **Goal:** buyerdb.netlify.app always shows yesterday's new NYC CRE deals without
 anyone touching anything.
 
-## How data actually flows
+## ⚡ 2026-07-06 (late): Base44 removal in progress — cutover state
+
+User directive: Base44 is NOT part of this system. Cutover to direct
+Supabase writes, status:
+
+| Piece | State |
+|---|---|
+| Base44 Contact enrichment (phones/emails/key persons/mailing) | ✅ HARVESTED into Supabase: 1,521 contacts + 4,457 entity mailing addresses (migration 007) |
+| acris-v2 | ✅ REWRITTEN + deployed + tested: writes via `sync_upsert_deals()`, secret from app_config |
+| traded-daily | ✅ REWRITTEN + deployed + tested: dedupe reads Supabase shortcodes; `body.maxFetches` caps spend |
+| crexi-ingest / crexi-run / dos-enrich | 🟡 REWRITES STAGED in `skyline/supabase/functions/` — deploy blocked by an MCP tool-approval prompt; deploy verbatim when cleared |
+| pipeline-reconcile, llm-enrich | 🟡 still scheduled — retire (cron.unschedule jobs 4, 8) ONLY after crexi-ingest rewrite is live |
+| skyline-sync (Base44→Supabase bridge, job 9) | 🟡 KEEP until crexi-ingest rewrite is live (it still ferries crexi/Base44 output); then unschedule + delete function |
+| ScraperAPI | ❌ 0 credits left (6,869/1,000 used; resets ~Jul 24) — traded.co discovery silently returns 0 until reset/upgrade, or re-arm the free curl_cffi GitHub-Actions worker |
+| llm-enrich replacement | ⏸ parked — it used Base44's InvokeLLM (web-grounded Gemini). Needs an AI provider key (Phase B: none supplied yet) to rebuild off-Base44 |
+
+Decommission checklist (in order): deploy 3 staged functions → invoke each once,
+verify `errors:0` → `SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname IN
+('dealflow-reconcile-daily','dealflow-llm-enrich-daily','skyline-sync-daily')` →
+delete functions skyline-sync, pipeline-reconcile, llm-enrich, acris-daily,
+acris-window, traded-fetch-probe → rotate the Base44 API key (it is burned into
+old function versions) → Base44 app becomes an archive.
+
+## How data actually flows (target architecture after cutover)
+
+```
+pg_cron (Supabase)                              all times UTC
+  05:00/05:50 Sun  crexi-run / crexi-ingest ─┐
+  06:00  acris-v2 (deed pulls, class gates)  ├─▶  sync_upsert_deals()  ─▶ deals/
+  06:12  traded-daily                        │    (single invariant     properties/
+  06:50  dos-enrich (NYS registry)          ─┘     write path in SQL)   entities/
+                                                                        deal_parties/
+                                                                        contacts
+                                              │ PostgREST RPC (api_*, anon key, RLS)
+                                              ▼
+                                     buyerdb.netlify.app
+```
+
+## Legacy data flow (pre-cutover, for reference)
 
 ```
 pg_cron (Supabase)                              all times UTC

@@ -1,0 +1,5 @@
+-- 007: one-time harvest of enriched Base44 Contact records into Skyline
+-- (applied to prod 2026-07-06 as skyline_007_b44_contact_harvest).
+-- Result: 6,344 staged -> 4,498 entities matched, 1,521 contacts inserted,
+-- 4,457 entity mailing addresses filled. Staging table cleared after run.
+-- See production migration history for full source; kept here as record.

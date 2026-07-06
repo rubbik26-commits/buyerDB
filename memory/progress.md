@@ -1,5 +1,30 @@
 # Progress Log
 
+## 2026-07-06 (night) — BASE44 REMOVAL (user directive: "this system has nothing to do with base44")
+User chose "Cut Base44 out" — scrapers write directly to Supabase. Done so far:
+1. **Contact harvest** (before decommission): pulled all 7,818 Base44 Contact records;
+   6,344 had value → 4,498 entities matched → **1,521 contacts inserted** (889 phones /
+   226 emails / 1,787 key persons in source set) + **4,457 entity mailing addresses**
+   filled (null-only). Migrations 007/008.
+2. **acris-v2 rewritten** → direct `sync_upsert_deals()`; deployed; tested on a May
+   window: 646 masters → 103 qualified → 101 dup (continuity ✓), 0 errors.
+3. **traded-daily rewritten** → deployed; tested (maxFetches=2): reads 1,112 TRADED
+   shortcodes from Supabase ✓, 0 errors. Discovery returned 0 — see finding below.
+4. **crexi-ingest / crexi-run / dos-enrich rewrites STAGED** in
+   `skyline/supabase/functions/` — deploys blocked: the Supabase MCP
+   `deploy_edge_function` tool now demands an approval this session can't grant
+   (execute_sql still works). Deploy verbatim when approval clears.
+5. Cron topology deliberately unchanged until step 4 lands (skyline-sync keeps
+   bridging crexi output; reconcile/llm-enrich retire after). Checklist in
+   SOP-daily-refresh.md.
+
+**Finding:** ScraperAPI account has **0 credits** (6,869 used / 1,000 monthly, resets
+~Jul 24) → traded.co discovery has been silently returning 0 for a while (predates
+tonight). Options: wait for reset, upgrade plan, or re-arm the free curl_cffi
+GitHub-Actions worker (the one thing the legacy path does better).
+**Finding:** llm-enrich depends on Base44's InvokeLLM engine — parked until an AI
+provider key exists (Phase B: none supplied).
+
 ## 2026-07-06 — Protocol 0 initialization
 - Created `/memory/` (task_plan, findings, progress, decisions), `/architecture/`,
   `/execution/`, `/.tmp/` (gitignored), root `.gitignore`, and `CLAUDE.md` constitution.
