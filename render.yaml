@@ -1,0 +1,24 @@
+# Render blueprint: deploys the FastAPI backend (the layer Netlify cannot host).
+# In the Render dashboard: New → Blueprint → connect this repo. After the service
+# is live, set VITE_API_URL on the Netlify site to this service's public URL.
+services:
+  - type: web
+    name: skyline-api
+    runtime: python
+    rootDir: skyline
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: DATABASE_URL          # Supabase → Connect → Session pooler URI
+        sync: false
+      - key: FRONTEND_URL          # your Netlify site URL, e.g. https://buyerdb.netlify.app
+        sync: false
+      - key: GROQ_API_KEY          # free primary AI lane (console.groq.com); optional
+        sync: false
+      - key: AI_PROVIDER_ORDER
+        value: groq,gemini,openrouter,cloudflare
+      - key: AI_QUALITY_PROVIDER
+        value: anthropic,openai
+      - key: PYTHON_VERSION
+        value: 3.12.7
