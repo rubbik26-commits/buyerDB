@@ -1,0 +1,14 @@
+# Netlify deploys ONLY the static frontend (skyline/frontend). The FastAPI
+# backend and Postgres cannot run on Netlify — deploy them to Render/Railway
+# and Supabase respectively, then set VITE_API_URL (Site settings → Environment
+# variables) to the backend's public URL so the built bundle points at it.
+[build]
+  base = "skyline/frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+# Single-page app: serve index.html for every route.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

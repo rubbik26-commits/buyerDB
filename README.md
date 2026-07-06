@@ -16,6 +16,22 @@ database/  numbered SQL migrations
 scripts/   CSV → Postgres migration + assertions
 ```
 
+> **Repository layout:** in this repo the application lives in the `skyline/`
+> subfolder — `cd skyline` before running any command below. The GitHub Actions
+> workflows live at the repo root (`.github/workflows/`) and are already
+> path-adjusted for this nesting.
+>
+> **One host is not enough.** This is a four-part system and each part has its
+> own home. Netlify (or Vercel) hosts **only** the static frontend — the
+> included `netlify.toml` builds `skyline/frontend` automatically; set
+> `VITE_API_URL` in the Netlify site's environment variables to the backend's
+> public URL. The FastAPI backend runs on Render/Railway (with the `.env`
+> variables from `skyline/.env.example`), Postgres runs on Supabase (apply the
+> two migrations, then load the CSV with `scripts/migrate_csv.py`), and the
+> scraper worker runs on GitHub Actions using repo Secrets (`DATABASE_URL`
+> etc.). Deploying only the frontend gives you a UI that reports “Can’t reach
+> the API” — that is expected until the backend and database are up.
+
 Why a backend is mandatory (not a preference): browsers can't run cron, a client bundle
 can't hold provider/scraper keys, the artifact's Anthropic call only works behind Claude.ai's
 proxy, and the dataset is already >1 MB and grows daily. All four are structural.
