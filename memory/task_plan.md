@@ -2,7 +2,7 @@
 
 **Session start:** 2026-07-06
 **Branch:** `claude/blast-protocol-setup-l8c6yu`
-**Status:** Protocol 0 complete → **HALTED at Phase B awaiting the five discovery answers.**
+**Status:** Phase B ✅ approved (all 5 answers given 2026-07-06) → **Phase L in progress.**
 
 ## Protocol 0 — Initialization
 - [x] `/memory/` created (task_plan, findings, progress, decisions)
@@ -10,24 +10,24 @@
 - [x] `/architecture/`, `/execution/`, `/.tmp/` skeleton created
 - [x] Halt: no logic written in `/execution/` — Blueprint questions outstanding
 
-## Phase B — Blueprint (Vision & Logic)  ← CURRENT
-Discovery questions (each must be answered by the user before coding):
-- [ ] **North Star** — the singular outcome that means we won.
-      *Working hypothesis from repo evidence (unconfirmed):* live, daily-refreshed NYC CRE deal/buyer intelligence answering "who is the best buyer for this deal, and how do I reach them?"
-- [ ] **Integrations** — which external services, and are credentials ready?
-      *Candidates found in repo:* Supabase (Postgres), Render/Railway (FastAPI), Netlify/Vercel (frontend), GitHub Actions (worker cron), NYC Open Data/Socrata (ACRIS/PLUTO), traded.co scrape, AI providers (Groq/Gemini/OpenRouter/Cloudflare/Anthropic/OpenAI), optionally Apollo.io + Base44 (connected to this session).
-- [ ] **Source of Truth** — where the primary data lives.
-      *Candidates:* the canonical CSV (`NEW_YORK_CLOSED_ENRICHED_v8.csv`, 4,129 rows) vs. a live Supabase Postgres instance (migrations exist in `skyline/database/`). Is a Supabase project already provisioned and loaded?
-- [ ] **Delivery Payload** — how/where the final result lands (deployed web app? Slack digest? Sheet? email?).
-- [ ] **Behavioral Rules** — tone, must-dos, must-not-dos, refusal triggers.
-      *Already encoded in repo (to confirm they remain law):* amount gate, no-residential gate, never overwrite non-null, conflicts flagged not resolved, no fabricated contact info, no contact data to trainable free tiers.
-- [ ] Data Schema (Input + Output) confirmed in CLAUDE.md — Payload shape signed off
-- [ ] Research logged in `/memory/findings.md` (initial pass done; extend per answers)
+## Phase B — Blueprint (Vision & Logic) ✅ 2026-07-06
+- [x] **North Star:** deploy the existing Skyline system live end-to-end (user-selected).
+- [x] **Integrations:** Supabase ready (MCP), Netlify ready (MCP), GitHub Actions (this repo).
+      Open: backend Python host credentials; AI provider keys (non-blocking — honest degradation).
+- [x] **Source of Truth:** Supabase Postgres after CSV migration; CSV becomes snapshot.
+- [x] **Delivery Payload:** live public URL, full stack; shape confirmed in CLAUDE.md.
+- [x] **Behavioral Rules:** all seven repo invariants adopted unchanged.
+- [x] Data Schema (Input + Output) confirmed in CLAUDE.md
+- [x] Research logged in `/memory/findings.md`
 
-## Phase L — Link (Connectivity)
-- [ ] Enumerate every credential from Phase B answers into `.env`
-- [ ] Probe script per service in `/execution/` (e.g. `probe_supabase.py`, `probe_socrata.py`, `probe_ai_providers.py`)
-- [ ] All probes green, results logged in progress.md — else halt
+## Phase L — Link (Connectivity)  ← CURRENT
+- [ ] Supabase: list/inspect (or create) project; apply 4 migrations; verify with SQL probe
+- [ ] Netlify: verify account/site access via MCP reader
+- [ ] GitHub Actions: confirm workflows present + secrets list needed for worker
+- [ ] Socrata (ACRIS/PLUTO): unauthenticated probe from `/execution/probe_socrata.py`
+- [ ] traded.co: reachability note (curl_cffi only proves out on the Actions runner)
+- [ ] Backend host: BLOCKED — needs user's Render/Railway credentials or host decision
+- [ ] All green links logged in progress.md; broken links halt their dependent phases
 
 ## Phase A — Architect (A.N.T.)
 - [ ] `/architecture/` SOP per subsystem (ingest, gate/merge, enrichment, agent, delivery)

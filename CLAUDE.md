@@ -10,15 +10,15 @@ Living memory lives in `/memory/` — read `task_plan.md`, `findings.md`, `progr
 | Phase | Status | Output |
 |---|---|---|
 | 0 — Initialization | ✅ 2026-07-06 | memory + constitution + skeleton committed |
-| B — Blueprint | 🟡 IN PROGRESS | **HALTED: awaiting the 5 discovery answers** (see `/memory/task_plan.md`) |
-| L — Link | ⬜ not started | — |
+| B — Blueprint | ✅ 2026-07-06 | 5 discovery answers recorded below; Payload shape confirmed |
+| L — Link | 🟡 5/7 GREEN | Supabase (loaded!), Netlify (live), Socrata, CI, deploy-frontend ✅ · worker crons ❌ (no `DATABASE_URL` secret) · backend host ❌ (not provisioned) — see `/memory/progress.md` |
 | A — Architect | ⬜ not started | — |
 | S — Stylize | ⬜ not started | — |
 | T — Trigger | ⬜ not started | — |
 
-**Standing halt:** no logic may be written in `/execution/` until the Blueprint discovery
-questions are answered, the Data Schema below is confirmed (especially the Payload/output
-shape), and the Blueprint in `task_plan.md` is approved by the user.
+**Protocol 0 halt lifted 2026-07-06:** all five discovery questions answered by the user,
+Payload shape confirmed below, Blueprint approved in `task_plan.md`. `/execution/` may now
+hold Phase L probe scripts and approved tools.
 
 ## Repository map
 
@@ -51,9 +51,32 @@ Relational shape (properties / entities / deals / deal_parties / contacts / inte
 ledgers) is fully specified in `SKYLINE_MASTER_BLUEPRINT.md` §4–5 and
 `skyline/database/migrations/`.
 
-### Output / Payload shape — ⚠️ UNCONFIRMED
-Defined only after the Blueprint "Delivery Payload" answer. **Coding begins only once this
-shape is confirmed** (Data-First Rule).
+### Output / Payload shape — ✅ CONFIRMED 2026-07-06
+The Payload is the **live, full-stack Skyline deployment**. Project is Complete only when
+every field below is real and verified:
+
+```json
+{
+  "frontend_url": "https://<site>.netlify.app — serves all four tabs",
+  "backend_url": "https://<service> — FastAPI, Python host",
+  "database": {
+    "host": "Supabase Postgres (canonical source of truth)",
+    "migrations_applied": ["001_schema","002_borough_statewide","003_enable_rls","004_rest_rpc_api"],
+    "deals_loaded": "NEW_YORK_CLOSED_ENRICHED_v8.csv via scripts/migrate_csv.py",
+    "assertions": "scripts/assert_migration.py → ALL ASSERTIONS PASSED"
+  },
+  "health_checks": {
+    "GET {backend}/api/health": 200,
+    "GET {backend}/api/deals?limit=1": "200 with a real row",
+    "frontend Deals tab": "renders live data (screenshot)",
+    "no secrets in dist/": "CI secret-pattern scan clean"
+  },
+  "cron": {
+    "daily-incremental.yml": "green run against Supabase",
+    "weekly-enrichment.yml": "enabled"
+  }
+}
+```
 
 ## Behavioral rules (provisional — adopted from repo invariants; user may amend in Phase B)
 
@@ -83,8 +106,21 @@ shape is confirmed** (Data-First Rule).
 
 ## B.L.A.S.T. phase outputs
 
-- **B — Blueprint:** *(pending discovery answers)*
-- **L — Link:** *(pending)*
+- **B — Blueprint (✅ 2026-07-06, user-answered):**
+  1. *North Star:* the existing Skyline Deal Intelligence system running live in production
+     end-to-end — Supabase loaded, backend deployed, frontend on Netlify, daily scraper cron green.
+  2. *Integrations:* Supabase ✅ ready (MCP connected), Netlify ✅ ready (MCP connected),
+     GitHub ✅ (this repo). Backend Python host (Render/Railway/Fly) — credentials NOT yet
+     provided. AI provider keys — NOT yet provided (app degrades honestly without them).
+  3. *Source of Truth:* Supabase Postgres after CSV migration; the repo CSV becomes a
+     historical snapshot; scrapers write to the database.
+  4. *Delivery Payload:* live public URL, full stack (shape above).
+  5. *Behavioral Rules:* all seven repo invariants adopted unchanged; agent tone is
+     professional broker-grade, cites sources, answers "no data" rather than guessing.
+- **L — Link (🟡 2026-07-06):** database + frontend + data-tab pipeline fully live —
+  buyerdb.netlify.app → Supabase RPC → 4,099 deals. Probe: `execution/probe_links.sh`.
+  Red links (user credentials required): worker `DATABASE_URL` secret; backend host.
+  Full table in `/memory/progress.md`.
 - **A — Architect:** *(pending)*
 - **S — Stylize:** *(pending)*
 - **T — Trigger:** *(pending — triggers documented here when armed; existing GitHub Actions
