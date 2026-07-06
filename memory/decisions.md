@@ -31,6 +31,14 @@ else blocks on it.
 Needs the user's Render account to connect the repo; assistant verifies `/api/health` and
 flips Netlify's `VITE_API_URL` afterward. Data tabs stay on Supabase RPC mode meanwhile.
 
+**D-010 — Base44 is OUT of the system (user directive, 2026-07-06 night).**
+Supersedes the D-008 sync-bridge architecture: scrapers now write directly into
+Supabase via `sync_upsert_deals()`; the bridge and Base44-only functions retire once
+the last staged deploy (crexi-ingest) lands. Enriched Base44 contact data was
+harvested first (1,521 contacts, 4,457 mailing addresses). *Why:* the user states
+Base44 is not part of this system; Supabase is the Phase-B source of truth; one write
+path, one platform, and the hardcoded-key exposure disappears with the Base44 hop.
+
 **D-008 — Daily refresh is Supabase-native (Base44 → skyline-sync), NOT GitHub Actions (2026-07-06).**
 The user's operating stack (Netlify + Supabase + Base44, pg_cron already green daily)
 was discovered live; a sync bridge respects it instead of forcing the GitHub worker
