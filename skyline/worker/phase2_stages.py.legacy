@@ -1,0 +1,107 @@
+import sys, pickle, os, time
+sys.path.insert(0, '/home/claude/scrapers')
+from acris_enrich import *
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+D = '/home/claude/scrapers'
+BUDGET = float(sys.argv[2]) if len(sys.argv) > 2 else 100.0
+T0 = time.time()
+left = lambda: BUDGET - (time.time() - T0)
+
+df = pd.read_pickle('/home/claude/cleaned.pkl')
+def src(u):
+    u = str(u); return 'acris' if 'a836-acris' in u else ('traded' if 'traded.co' in u else ('crexi' if 'crexi' in u else 'none'))
+df['src'] = df['Source URL'].apply(src)
+prev = pickle.load(open(f'{D}/phase1_matches.pkl','rb'))['matches']
+targets = df[(df['src']!='acris') & (df['Buyer'].isna() | df['Seller'].isna())
+             & df['Borough'].isin(BOROUGH_CODE) & (~df.index.isin(prev))].copy()
+
+stage = sys.argv[1]
+
+if stage == 'legals':
+    CKPT = f'{D}/phase2_legals.ckpt'
+    done = pickle.load(open(CKPT,'rb')) if os.path.exists(CKPT) else {}
+    GENERIC = set(SUF.values()) | set(DIR.values()) | {'THE','OF','LA','DE'}
+    def key_token(name):
+        toks = [t for t in name.split() if t not in GENERIC]
+        return max(toks, key=len) if toks else None
+    def lookup(item):
+        i, addr, boro = item
+        num, name = split_address(addr)
+        tok = key_token(name or '')
+        if not num or not tok: return i, 'unparseable', None
+        try:
+            rows = soql(LEGALS, {'$select': 'document_id,street_number,street_name,borough,block,lot,property_type',
+                                 '$where': f"street_number='{num}' AND borough='{BOROUGH_CODE[boro]}' AND street_name like '%{tok}%'",
+                                 '$limit': '5000'})
+        except Exception as e:
+            return i, f'error:{e}', None
+        hits = [r for r in rows if canon_street(r.get('street_name')) == name]
+        return (i, 'ok', ({r['document_id'] for r in hits}, hits[0])) if hits else (i, 'nohit', None)
+    todo = [(i, r['Address'], r['Borough']) for i, r in targets.iterrows() if i not in done]
+    print('legals todo:', len(todo))
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for f in as_completed([ex.submit(lookup, t) for t in todo]):
+            i, s, p = f.result(); done[i] = (s, p)
+            if left() < 10: break
+    pickle.dump(done, open(CKPT,'wb'))
+    st = pd.Series([s for s,_ in done.values()]).apply(lambda s: s.split(':')[0]).value_counts()
+    print('status:', st.to_dict(), '| remaining:', len(targets) - len(done))
+
+elif stage == 'masters':
+    done = pickle.load(open(f'{D}/phase2_legals.ckpt','rb'))
+    ok = {i: p for i, (s, p) in done.items() if s == 'ok'}
+    pool = sorted(set().union(*[docs for docs, _ in ok.values()])) if ok else []
+    MCKPT = f'{D}/phase2_masters.ckpt'
+    masters, done_chunks = pickle.load(open(MCKPT,'rb')) if os.path.exists(MCKPT) else ({}, set())
+    chunks = list(enumerate(chunked(pool, 150)))
+    todo = [(n, c) for n, c in chunks if n not in done_chunks]
+    print(f'masters chunks: {len(todo)} todo of {len(chunks)}')
+    def fetch(nc):
+        n, chunk = nc
+        ids = ','.join(f"'{d}'" for d in chunk)
+        rows = soql_all(MASTER, f"document_id IN ({ids}) AND doc_type IN {DEED_TYPES}", 'document_id ASC',
+                        select='document_id,document_amt,document_date,doc_type')
+        return n, rows
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = [ex.submit(fetch, nc) for nc in todo]
+        for f in as_completed(futs):
+            n, rows = f.result()
+            for m in rows: masters[m['document_id']] = m
+            done_chunks.add(n)
+            if left() < 10:
+                break
+    pickle.dump((masters, done_chunks), open(MCKPT,'wb'))
+    print(f'masters collected: {len(masters)} | chunks done: {len(done_chunks)}/{len(chunks)}')
+
+elif stage == 'match':
+    done = pickle.load(open(f'{D}/phase2_legals.ckpt','rb'))
+    ok = {i: p for i, (s, p) in done.items() if s == 'ok'}
+    masters, _ = pickle.load(open(f'{D}/phase2_masters.ckpt','rb'))
+    matches2, price_fills = {}, {}
+    no_deed = no_amt = too_far = 0
+    for i, (docs, legal0) in ok.items():
+        row = targets.loc[i]
+        deeds = [masters[d] for d in docs if d in masters and float(masters[d].get('document_amt') or 0) > 0]
+        if not deeds: no_deed += 1; continue
+        sd = row['sale_date_iso']
+        def ddist(m):
+            dd = (m.get('document_date') or '')[:10]
+            return abs((pd.Timestamp(sd) - pd.Timestamp(dd)).days) if sd and dd else 9999
+        price = row['Sale Price']
+        if pd.notna(price):
+            cands = [m for m in deeds if abs(float(m['document_amt']) - price) / price <= 0.03]
+            if not cands: no_amt += 1; continue
+            best = min(cands, key=ddist)
+            if ddist(best) > 400: too_far += 1; continue
+            matches2[i] = (best['document_id'], legal0)
+        else:
+            cands = sorted([m for m in deeds if float(m['document_amt']) >= 200000 and ddist(m) <= 240], key=ddist)
+            if len(cands) == 1 or (len(cands) > 1 and ddist(cands[0]) < ddist(cands[1])):
+                matches2[i] = (cands[0]['document_id'], legal0)
+                price_fills[i] = float(cands[0]['document_amt'])
+    print(f'RESULT matched={len(matches2)} price_fills={len(price_fills)} no_deed={no_deed} no_amt={no_amt} too_far={too_far}')
+    pickle.dump({'matches2': matches2, 'price_fills': price_fills}, open(f'{D}/phase2_matches.pkl','wb'))
+    un = targets[~targets.index.isin(matches2)]
+    print(f'unfilled dated >= 2026-05-01 (ACRIS lag window): {(un["sale_date_iso"] >= "2026-05-01").sum()} of {len(un)}')

@@ -1,0 +1,95 @@
+"""
+rolling_sales.py — NYC DOF Rolling Sales (usep-8jbt) enrichment.
+
+Fills MISSING Sq Ft and Units for NYC rows by matching address+borough in the
+Rolling Sales feed. These are PROPERTY attributes (they belong to the building,
+not to one transaction), so an address-level match is sufficient — but:
+  - a match is used only when all Rolling Sales rows for that address agree
+    (ambiguous multi-building addresses are skipped, never guessed)
+  - existing values are NEVER overwritten; a >20% disagreement between an
+    existing value and Rolling Sales is FLAGGED needs_review, not changed
+  - condo building classes (R*) in the match are ignored per the standing rule
+
+Checkpointed: rolling_done.pkl / rolling_fills.pkl. Run:
+    python3 rolling_sales.py <base.pkl> <out.pkl> <batch_size>
+"""
+import sys, os, re, time, pickle, random
+import pandas as pd
+import requests
+
+D = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, D)
+from acris_enrich import BOROUGH_CODE, canon_street, split_address
+
+URL = "https://data.cityofnewyork.us/resource/usep-8jbt.json"
+HDRS = {"User-Agent": "Mozilla/5.0"}
+
+
+def fetch_candidates(num, tok, boro_code):
+    num_esc, tok_esc = str(num).replace("'", "''"), str(tok).replace("'", "''")
+    p = {"$select": "address,gross_square_feet,total_units,building_class_at_time_of,sale_price",
+         "$where": f"borough='{boro_code}' AND address like '{num_esc} %{tok_esc}%'",
+         "$limit": "50"}
+    r = requests.get(URL, params=p, headers=HDRS, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def consistent(values):
+    vals = {int(float(v)) for v in values if v and float(v) > 0}
+    return vals.pop() if len(vals) == 1 else None
+
+
+def run(base_path, out_path, batch):
+    df = pd.read_pickle(base_path)
+    done = pickle.load(open(f"{D}/rolling_done.pkl", "rb")) if os.path.exists(f"{D}/rolling_done.pkl") else set()
+    targets = df[(df["Sq Ft"].isna() | df["Units"].isna())
+                 & df["Borough"].isin(BOROUGH_CODE)].index
+    todo = [i for i in targets if i not in done][:batch]
+    print(f"targets {len(targets)} | done {len(done)} | batch {len(todo)}")
+    filled = {"Sq Ft": 0, "Units": 0}
+    flagged = ambiguous = nohit = 0
+    for i in todo:
+        done.add(i)
+        row = df.loc[i]
+        num, name = split_address(row["Address"])
+        toks = [t for t in (name or "").split() if len(t) > 2]
+        if not num or not toks:
+            nohit += 1; continue
+        try:
+            cands = fetch_candidates(num, max(toks, key=len), BOROUGH_CODE[row["Borough"]])
+        except Exception as e:
+            print("  fetch error idx", i, e); done.discard(i); continue
+        cands = [c for c in cands
+                 if canon_street(re.sub(r"^\S+\s+", "", c.get("address", ""))) == name
+                 and not str(c.get("building_class_at_time_of", "")).upper().startswith("R")]
+        if not cands:
+            nohit += 1; continue
+        sf = consistent(c.get("gross_square_feet") for c in cands)
+        un = consistent(c.get("total_units") for c in cands)
+        if sf is None and un is None:
+            ambiguous += 1; continue
+        note = []
+        if pd.isna(row["Sq Ft"]) and sf:
+            df.at[i, "Sq Ft"] = sf; filled["Sq Ft"] += 1; note.append(f"sqft {sf}")
+        elif pd.notna(row["Sq Ft"]) and sf and abs(sf - row["Sq Ft"]) / max(sf, row["Sq Ft"]) > 0.20:
+            df.at[i, "Parse Status"] = "needs_review"; flagged += 1
+            note.append(f"sqft conflict: has {int(row['Sq Ft'])} vs RollingSales {sf}")
+        if pd.isna(row["Units"]) and un:
+            df.at[i, "Units"] = un; filled["Units"] += 1; note.append(f"units {un}")
+        if note:
+            df.at[i, "Notes"] = str(df.at[i, "Notes"] or "") + " | RollingSales(usep-8jbt): " + ", ".join(note)
+        time.sleep(random.uniform(0.05, 0.15))
+    pickle.dump(done, open(f"{D}/rolling_done.pkl", "wb"))
+    # recompute derived metrics for newly completed rows (fill-only)
+    m = df["PPSF"].isna() & df["Sale Price"].notna() & df["Sq Ft"].notna() & (df["Sq Ft"] > 0)
+    df.loc[m, "PPSF"] = (df.loc[m, "Sale Price"] / df.loc[m, "Sq Ft"]).round()
+    m2 = df["PPU"].isna() & df["Sale Price"].notna() & df["Units"].notna() & (df["Units"] > 0)
+    df.loc[m2, "PPU"] = (df.loc[m2, "Sale Price"] / df.loc[m2, "Units"]).round()
+    df.to_pickle(out_path)
+    print(f"fills {filled} | conflicts flagged {flagged} | ambiguous skipped {ambiguous} | no hit {nohit}")
+    print(f"PPSF recomputed +{int(m.sum())} | PPU recomputed +{int(m2.sum())} | remaining {len(targets) - len(done)}")
+
+
+if __name__ == "__main__":
+    run(sys.argv[1], sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 400)

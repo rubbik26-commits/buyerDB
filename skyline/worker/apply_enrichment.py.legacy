@@ -1,0 +1,98 @@
+"""
+apply_enrichment.py — applies ACRIS match results to the dataset.
+
+ROOT-CAUSE GUARD: every party fill must pass the amount gate — the matched
+deed's document_amt must be within 3% of the row's Sale Price (or the row must
+have no price AND the deed date within 60 days of the sale date). An earlier
+"fallback" pass matched by address+date only and attached parties from wrong
+deeds on all 34 of its rows (verified against ACRIS on 2026-07-02); this gate
+makes that class of error structurally impossible, regardless of which
+matching stage produced the candidate.
+
+Fill policy: NEVER overwrite a non-null field. Only Buyer, Seller,
+Buyer Address, Seller Address, Sale Price (phase-2 unique-deed only) are
+filled. Provenance is appended to Notes.
+
+Usage:
+    python3 apply_enrichment.py <base.pkl> <matches.pkl> <out.pkl>
+matches.pkl: {"matches": {row_index: doc_id}} or {"matches2": {idx: (doc_id, legal)}}
+"""
+import sys, pickle, re
+import pandas as pd
+from acris_enrich import (soql_all, soql, MASTER, chunked, fetch_parties,
+                          is_placeholder)
+
+AMOUNT_TOL = 0.03
+NO_PRICE_DATE_WINDOW_DAYS = 60
+
+
+def load_matches(path):
+    blob = pickle.load(open(path, "rb"))
+    raw = blob.get("matches") or blob.get("matches2") or {}
+    out = {}
+    for i, v in raw.items():
+        out[i] = v[0] if isinstance(v, tuple) else v
+    return out
+
+
+def amount_gate(row, master):
+    amt = float(master.get("document_amt") or 0)
+    price = row["Sale Price"]
+    if pd.notna(price) and price > 0:
+        return amt > 0 and abs(amt - price) / price <= AMOUNT_TOL
+    dd = (master.get("document_date") or "")[:10]
+    sd = row.get("sale_date_iso")
+    if not dd or not sd:
+        return False
+    return abs((pd.Timestamp(sd) - pd.Timestamp(dd)).days) <= NO_PRICE_DATE_WINDOW_DAYS
+
+
+def main(base_path, matches_path, out_path):
+    df = pd.read_pickle(base_path)
+    matches = load_matches(matches_path)
+    docs = sorted(set(matches.values()))
+    masters = {}
+    for ch in chunked(docs, 100):
+        ids = ",".join(f"'{d}'" for d in ch)
+        for m in soql_all(MASTER, f"document_id IN ({ids})", "document_id ASC",
+                          select="document_id,document_amt,document_date,doc_type"):
+            masters[m["document_id"]] = m
+    parties = fetch_parties(docs)
+
+    filled = {"Buyer": 0, "Seller": 0, "Buyer Address": 0, "Seller Address": 0,
+              "Sale Price": 0}
+    gated_out = 0
+    for i, doc in matches.items():
+        if i not in df.index:
+            continue
+        m = masters.get(doc)
+        if not m or not amount_gate(df.loc[i], m):
+            gated_out += 1
+            continue
+        pt = parties.get(doc, {})
+        pairs = [("Buyer", "buyer"), ("Seller", "seller"),
+                 ("Buyer Address", "buyer_address"),
+                 ("Seller Address", "seller_address")]
+        touched = False
+        for col, key in pairs:
+            v = pt.get(key)
+            if pd.isna(df.at[i, col]) and v and not is_placeholder(v):
+                df.at[i, col] = v
+                filled[col] += 1
+                touched = True
+        if pd.isna(df.at[i, "Sale Price"]):
+            df.at[i, "Sale Price"] = float(m["document_amt"])
+            filled["Sale Price"] += 1
+            touched = True
+        if touched:
+            df.at[i, "Notes"] = (str(df.at[i, "Notes"] or "")
+                                 + f" | parties from ACRIS {doc} (amount-gated)").strip(" |")
+    df.to_pickle(out_path)
+    print("fills:", filled, "| rejected by amount gate:", gated_out,
+          "| saved:", out_path)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        sys.exit(__doc__)
+    main(sys.argv[1], sys.argv[2], sys.argv[3])

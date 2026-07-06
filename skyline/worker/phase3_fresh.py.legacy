@@ -1,0 +1,139 @@
+import sys, pickle, os, time
+sys.path.insert(0, '/home/claude/scrapers')
+from acris_enrich import *
+import pandas as pd
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+D = '/home/claude/scrapers'
+stage = sys.argv[1]
+PRICE_FLOOR = 1_000_000
+RECENT_DAYS = 120
+MASTER_CAP = 4000
+
+if stage == 'masters':
+    since = (datetime.utcnow() - timedelta(days=RECENT_DAYS)).strftime('%Y-%m-%d')
+    w = (f"doc_type IN {DEED_TYPES} AND document_amt >= {PRICE_FLOOR} "
+         f"AND recorded_datetime >= '{since}T00:00:00.000'")
+    ms = soql_all(MASTER, w, 'recorded_datetime DESC', page=1000, cap=MASTER_CAP)
+    pickle.dump(ms, open(f'{D}/p3_masters.ckpt','wb'))
+    print(f'window since {since}: {len(ms)} masters')
+
+elif stage == 'detail':
+    ms = pickle.load(open(f'{D}/p3_masters.ckpt','rb'))
+    doc_ids = sorted({m['document_id'] for m in ms})
+    CKPT = f'{D}/p3_detail.ckpt'
+    state = pickle.load(open(CKPT,'rb')) if os.path.exists(CKPT) else {'parties': {}, 'legals': {}, 'pdone': set(), 'ldone': set()}
+    T0 = time.time(); BUDGET = 95
+    chunks = list(enumerate(chunked(doc_ids, 150)))
+
+    def fetch_p(nc):
+        n, c = nc
+        ids = ','.join(f"'{d}'" for d in c)
+        return ('p', n, soql_all(PARTIES, f"document_id IN ({ids})", 'document_id ASC'))
+    def fetch_l(nc):
+        n, c = nc
+        ids = ','.join(f"'{d}'" for d in c)
+        return ('l', n, soql_all(LEGALS, f"document_id IN ({ids})", 'document_id ASC'))
+
+    todo = ([('p', nc) for nc in chunks if nc[0] not in state['pdone']] +
+            [('l', nc) for nc in chunks if nc[0] not in state['ldone']])
+    print('detail chunk-jobs todo:', len(todo))
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = [ex.submit(fetch_p if k == 'p' else fetch_l, nc) for k, nc in todo]
+        for f in as_completed(futs):
+            kind, n, rows = f.result()
+            if kind == 'p':
+                for r in rows:
+                    d = state['parties'].setdefault(r['document_id'], {})
+                    addr = ', '.join(x for x in [r.get('address_1'), r.get('address_2'), r.get('city'), r.get('state'), r.get('zip')] if x)
+                    if r.get('party_type') == '1' and 'seller' not in d:
+                        d['seller'], d['seller_address'] = r.get('name'), addr or None
+                    elif r.get('party_type') == '2' and 'buyer' not in d:
+                        d['buyer'], d['buyer_address'] = r.get('name'), addr or None
+                state['pdone'].add(n)
+            else:
+                for r in rows:
+                    state['legals'].setdefault(r['document_id'], r)
+                state['ldone'].add(n)
+            if time.time() - T0 > BUDGET:
+                break
+    pickle.dump(state, open(CKPT,'wb'))
+    print(f"parties chunks {len(state['pdone'])}/{len(chunks)} | legals chunks {len(state['ldone'])}/{len(chunks)}")
+
+elif stage == 'pluto':
+    state = pickle.load(open(f'{D}/p3_detail.ckpt','rb'))
+    bbls = []
+    for lg in state['legals'].values():
+        b = build_bbl(lg.get('borough'), lg.get('block'), lg.get('lot'))
+        if b: bbls.append(b)
+    pl = fetch_pluto(bbls)
+    pickle.dump(pl, open(f'{D}/p3_pluto.ckpt','wb'))
+    print('pluto rows:', len(pl), 'for', len(set(bbls)), 'bbls')
+
+elif stage == 'build':
+    ms = pickle.load(open(f'{D}/p3_masters.ckpt','rb'))
+    state = pickle.load(open(f'{D}/p3_detail.ckpt','rb'))
+    pluto = pickle.load(open(f'{D}/p3_pluto.ckpt','rb'))
+    df = pd.read_pickle('/home/claude/enriched.pkl')
+
+    # existing keys: ACRIS doc_ids + normalized address+price
+    import re as _re
+    exist_docs = set(df['Source URL'].dropna().str.extract(r'doc_id=([A-Z0-9]+)', expand=False).dropna())
+    def normalize_address(a):
+        s = str(a).lower()
+        s = _re.sub(r'[.,#]', ' ', s)
+        s = _re.sub(r'\b(new york|ny|brooklyn|bronx|queens|manhattan|staten island)\b', '', s)
+        for k, v in {'east':'e','west':'w','north':'n','south':'s','street':'st','avenue':'ave',
+                     'boulevard':'blvd','road':'rd','place':'pl','parkway':'pkwy','drive':'dr',
+                     'lane':'ln','court':'ct','terrace':'ter','square':'sq'}.items():
+            s = _re.sub(rf'\b{k}\b', v, s)
+        s = _re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', s)
+        return _re.sub(r'\s+', ' ', s).strip()
+    exist_ap = {(normalize_address(a), int(p)) for a, p in zip(df['Address'], df['Sale Price']) if pd.notna(p)}
+
+    new_rows, rejected, dup = [], 0, 0
+    for m in ms:
+        doc = m['document_id']
+        if doc in exist_docs: dup += 1; continue
+        lg = state['legals'].get(doc)
+        if not lg: continue
+        num = (lg.get('street_number') or '').strip()
+        name = (lg.get('street_name') or '').strip()
+        if not num or not name: continue
+        if not re.match(r'^\d', num): continue   # isBadAddress rule from the Deno ingester
+        price = float(m.get('document_amt') or 0)
+        if price < PRICE_FLOOR: continue
+        bbl = build_bbl(lg.get('borough'), lg.get('block'), lg.get('lot'))
+        pl = pluto.get(str(int(bbl))) if bbl else None
+        units = int(pl['unitstotal']) if pl and pl.get('unitstotal') else None
+        asset = classify(pl.get('bldgclass') if pl else None, lg.get('property_type'), units)
+        if not asset: rejected += 1; continue
+        boro = CODE_BOROUGH.get(str(lg.get('borough') or '').strip())
+        addr = ' '.join(x for x in [num, name.title(), boro, 'NY'] if x)
+        key = (normalize_address(addr), int(price))
+        if key in exist_ap: dup += 1; continue
+        exist_ap.add(key)
+        pt = state['parties'].get(doc, {})
+        buyer = None if is_placeholder(pt.get('buyer')) else pt.get('buyer')
+        seller = None if is_placeholder(pt.get('seller')) else pt.get('seller')
+        if buyer and seller and norm_entity(buyer) == norm_entity(seller): seller = None
+        sqft = int(pl['bldgarea']) if pl and pl.get('bldgarea') else None
+        conf = 40 + (20 if buyer else 0) + (15 if seller else 0) + (15 if pl and pl.get('bldgclass') else 0) + (10 if sqft else 0)
+        new_rows.append({
+            'Sale Date': (m.get('document_date') or '')[:10] or None,
+            'Post Date': m.get('recorded_datetime'),
+            'Address': addr, 'Market': boro.lower() if boro else None, 'Borough': boro,
+            'Asset Type': asset, 'Buyer': buyer, 'Seller': seller,
+            'Buyer Address': pt.get('buyer_address'), 'Seller Address': pt.get('seller_address'),
+            'Sale Price': price, 'Units': units, 'Sq Ft': sqft,
+            'PPU': round(price/units) if units else None,
+            'PPSF': round(price/sqft) if sqft else None,
+            'Source URL': f'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id={doc}',
+            'Shortcode': f'ACRIS-{doc}', 'Confidence': min(100, conf),
+            'Parse Status': 'ok' if conf >= 60 else 'needs_review',
+            'Notes': f"ACRIS {doc} | fresh-window ingest | class {(pl or {}).get('bldgclass','?')} | BBL {bbl}",
+            'sale_date_iso': (m.get('document_date') or '')[:10] or None,
+        })
+    print(f'new deals: {len(new_rows)} | rejected by class: {rejected} | duplicates skipped: {dup}')
+    pickle.dump(new_rows, open(f'{D}/p3_new_rows.pkl','wb'))
