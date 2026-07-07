@@ -2,6 +2,28 @@
 
 Each entry: what was decided, and why. If a decision is reversed, append — never delete.
 
+## 2026-07-07
+
+**D-011 — Migration 009 + edge-function v2s are STAGED in git, not auto-applied to prod.**
+The refactor branch fixes live-schema defects (api_buyers fan-out, anonymous
+api_review_act write, sync_upsert_deals gate/conflict/lock hardening) as
+`009_hardening.sql` plus rewritten function sources, all verified on a fresh
+local Postgres (27/27 tests, 13/13 assertions). Applying to prod is a
+one-window user step: run 009, deploy the six functions (acris-v2 now sends
+`deed_amount`), verify a sync run. *Why:* the same session earlier could not
+deploy edge functions (tool approval), and coupling a schema change to
+un-deployed function sources would break the gate evidence handshake.
+
+**D-012 — TS normalization unified in `_shared/mod.ts`; SQL-side normalization deferred.**
+The four divergent edge-function copies of canonicalizeAddress/normalizeEntity
+are now one module mirroring `shared/normalize.py` (uppercase preserved so
+sync-era rows keep matching). Computing `address_norm` inside
+`sync_upsert_deals()` — the true single-implementation fix — needs a
+re-normalization data migration over existing rows (unique-collision merges)
+and is deferred to its own Blueprint task. *Why:* shortcode-first dedupe makes
+same-source re-runs safe today; the residual risk is cross-source property
+duplicates, which predates this change.
+
 ## 2026-07-06
 
 **D-001 — Layer B.L.A.S.T. structure alongside the existing `skyline/` app, not inside it.**
