@@ -1,0 +1,8 @@
+-- 008: write paths for broker contacts (crexi-ingest) and NYS DOS enrichment
+-- (dos-enrich) for the Base44-free pipeline (applied to prod 2026-07-06 as
+-- skyline_008_broker_and_dos_writes).
+-- upsert_broker_contacts(rows jsonb) -> entities + contacts (source 'crexi:broker')
+-- dos_targets(lim) -> company-like buyer/seller entities lacking a nys_dos contact
+-- dos_apply(rows jsonb) -> mailing fill (null-only) + one 'nys_dos' contact/entity
+-- All three: SECURITY DEFINER, EXECUTE granted to service_role only.
+-- See production migration history for full source.
