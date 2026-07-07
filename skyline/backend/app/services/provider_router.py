@@ -200,4 +200,13 @@ class Router:
                             latency_ms=None, input_tokens=None, output_tokens=None,
                             fallback_from=fallback_from, status=f"error:{e.kind}")
                 fallback_from = name
+            except Exception as e:
+                # An unexpected adapter bug (bad shape, library error) must fail
+                # OVER, not abort the whole chain and 500 past every remaining
+                # provider. Recorded distinctly so the drift is visible.
+                errors.append(f"{name}: unexpected {type(e).__name__}: {e}")
+                self.log_fn(provider=name, model=ad.model, purpose=purpose,
+                            latency_ms=None, input_tokens=None, output_tokens=None,
+                            fallback_from=fallback_from, status=f"error:unexpected:{type(e).__name__}")
+                fallback_from = name
         raise ProviderError("router", "all_providers_failed", "; ".join(errors) or "no providers configured")
