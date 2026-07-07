@@ -1,4 +1,9 @@
-INSERT INTO public.deal_parties VALUES
+-- Seed data (pg_dump-derived). Hardened 2026-07-07: explicit column
+-- lists (survive a future ALTER ADD COLUMN), ON CONFLICT DO NOTHING
+-- (idempotent re-run), and one transaction (all-or-nothing).
+BEGIN;
+
+INSERT INTO public.deal_parties (deal_id,entity_id,role,mailing_address,source_system,provenance_ref,amount_gate_passed,verified_deed_amount,match_confidence,created_at) VALUES
 	('755705c9-c499-4005-9acf-e938538a4e2a', 'b72099b9-f7a2-4c80-b9f4-653620920146', 'buyer', '150 81ST STREET, BROOKLYN, NY, 11209', 'acris', '2025072200180002', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('755705c9-c499-4005-9acf-e938538a4e2a', '4d77ab47-fa29-44d0-99d9-1910eb81c740', 'seller', '521 85TH STREET, BROOKLYN, NY, 11209', 'acris', '2025072200180002', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('70d9beda-1a88-4ad5-9976-fa5a412e0e78', '9958cfaf-064c-4ce0-8552-5b780136a61e', 'buyer', '142 PUMPKIN HOLLOW RD N, HILLSDALE, NY, 12529', 'acris', '2025071800208001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -298,8 +303,8 @@ INSERT INTO public.deal_parties VALUES
 	('cf4a887e-1412-4d70-8121-024fa172ddcb', 'd797a19b-34cb-4382-9f34-2523e33ca81a', 'seller', '371 MADISON STREET, BROOKLYN, NY, 11221', 'acris', '2025062400859001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('9fc2dd97-574b-4bc1-a403-80d76b2d3e62', '977b2865-656a-4417-831b-2869b164d833', 'buyer', 'C/O: HOLLAND & KNIGHT LLP, 787 SEVENTH AVENUE, 31ST FLOOR, NEW YORK, NY, 10019', 'acris', '2025062000405001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('9fc2dd97-574b-4bc1-a403-80d76b2d3e62', '652b25a1-9253-4e4d-a78f-f80a76eaf97a', 'seller', 'C/O: SYRACUSE REALTY GROUP, LLC, 106 S. MAIN STREET, SYRACUSE, NY, 13212', 'acris', '2025062000405001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('0faef212-ea62-4908-a401-77fd2d26ffe2', '70317129-11ef-4859-b85d-08c17373eb39', 'buyer', 'C/O:. DHD ARCHITECTURE & INTERIOR DESIGN, 200 PARK AVE SOUTH, #1401, NEW YORK, NY, 10003', 'acris', '2025062500173001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.deal_parties VALUES
+	('0faef212-ea62-4908-a401-77fd2d26ffe2', '70317129-11ef-4859-b85d-08c17373eb39', 'buyer', 'C/O:. DHD ARCHITECTURE & INTERIOR DESIGN, 200 PARK AVE SOUTH, #1401, NEW YORK, NY, 10003', 'acris', '2025062500173001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.deal_parties (deal_id,entity_id,role,mailing_address,source_system,provenance_ref,amount_gate_passed,verified_deed_amount,match_confidence,created_at) VALUES
 	('0faef212-ea62-4908-a401-77fd2d26ffe2', '205c08c8-c5ca-48d7-837e-ee4e5b5a77ed', 'seller', '2001 MARCUS AVE STE N15, NEW HYDE PARK, NY, 110422001', 'acris', '2025062500173001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('00ff791f-6dc9-48e9-b841-c8fe1f1fd088', '92252914-7d45-4302-bac8-9a9c4165452e', 'buyer', '721 AVE U, BROOKLYN, NY, 11223', 'acris', '2025062300689001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('00ff791f-6dc9-48e9-b841-c8fe1f1fd088', '7ee5c9a1-0f37-4513-b91a-8b86ec758475', 'seller', '430 BEACH 125TH STREET, ROCKAWAY PARK, NY, 11694', 'acris', '2025062300689001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -599,8 +604,8 @@ INSERT INTO public.deal_parties VALUES
 	('9fe6993e-bfd6-4935-99a9-766dffb62cda', '3414ac9a-fdc0-4fa4-8877-7abb8d89afad', 'seller', '150-15 78TH AVENUE, FLUSHING, NY, 11367', 'acris', '2025053000815001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('17c7433d-1f5d-4af0-a9ed-a3935d34568f', '027129b4-5799-4950-98fd-575819653938', 'buyer', '42 WEST STREET, SUITE 106, BROOKLYN, NY, 11222', 'acris', '2025060200154001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('17c7433d-1f5d-4af0-a9ed-a3935d34568f', 'b91186cf-6dd1-4063-8ffb-c192b5f27d6f', 'seller', 'C/O: SCHERER & PUDELL, 600 OLD COUNTRY ROAD, SUITE 328, GARDEN CITY, NY, 11530', 'acris', '2025060200154001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('0900bfeb-84b5-491d-ab2a-58b665aec223', 'c02e6236-cf58-4f5c-ac92-49d26348e2c2', 'buyer', 'C/O: EMP CAPITAL, 433 BROADWAY, 2ND FLOOR, NEW YORK, NY, 10013', 'acris', '2025053000903001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.deal_parties VALUES
+	('0900bfeb-84b5-491d-ab2a-58b665aec223', 'c02e6236-cf58-4f5c-ac92-49d26348e2c2', 'buyer', 'C/O: EMP CAPITAL, 433 BROADWAY, 2ND FLOOR, NEW YORK, NY, 10013', 'acris', '2025053000903001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.deal_parties (deal_id,entity_id,role,mailing_address,source_system,provenance_ref,amount_gate_passed,verified_deed_amount,match_confidence,created_at) VALUES
 	('0900bfeb-84b5-491d-ab2a-58b665aec223', '69044dfb-74c4-43b8-909c-316cf8059db8', 'seller', 'C/O: CROSSTOWN COMPANIES, 97-77 QUEESN BLVD, STE 1120, REGO PARK, NY, 11374', 'acris', '2025053000903001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('91af3be6-38c5-4406-b6db-10cb6ec7a06c', 'c99d82b4-9628-41c6-b35c-95bb0d8b33f4', 'buyer', '311 ROGERS AVENUE, BROOKLYN, NY, 11225', 'acris', '2025053000405001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('91af3be6-38c5-4406-b6db-10cb6ec7a06c', '1c224cde-e03e-4bc9-9961-a7faeeed019c', 'seller', '235 RIVER AVENUE, SUITE 220, LAKEWOOD, NJ, 08701', 'acris', '2025053000405001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -900,8 +905,8 @@ INSERT INTO public.deal_parties VALUES
 	('29c66d0d-59c3-4202-8713-747234af9bdf', '1ab97a3e-a7ef-4359-bede-d4bcb33ce645', 'seller', 'C/O KUSHNER COMPANIES LLC, 767 FIFTH AVENUE, NEW YORK, NY, 10003', 'acris', '2024010200356003', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('023f479c-4685-4c64-963d-27ce8a01ac68', 'cc6ba889-5ea3-4233-aec1-0804a38d0f3d', 'buyer', '431 54TH STREET, BROOKLYN, NY, 11220', 'acris', '2023122600395012', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('023f479c-4685-4c64-963d-27ce8a01ac68', 'a5ccef45-132a-4744-a0e2-528430e01f94', 'seller', '13190 SW 68TH PKWY, SUITE 110, TIGARD,, OR, 97223', 'acris', '2023122600395012', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('5d348296-5f7c-462d-a8e4-00a30c7d4d74', '74999bc6-2c4c-4a27-8bc0-3a3c83486f5f', 'buyer', 'PO BOX 1913, NEW YORK, NY, 10156', 'acris', '2023122800478001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.deal_parties VALUES
+	('5d348296-5f7c-462d-a8e4-00a30c7d4d74', '74999bc6-2c4c-4a27-8bc0-3a3c83486f5f', 'buyer', 'PO BOX 1913, NEW YORK, NY, 10156', 'acris', '2023122800478001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.deal_parties (deal_id,entity_id,role,mailing_address,source_system,provenance_ref,amount_gate_passed,verified_deed_amount,match_confidence,created_at) VALUES
 	('5d348296-5f7c-462d-a8e4-00a30c7d4d74', '9a6d31ce-7176-4e28-b9a1-bc5cb9195aea', 'seller', '72 LILLINE LANE, UPPER SADDLE RIVER, NJ, 07458', 'acris', '2023122800478001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('6bf7bc49-5fc8-4d16-abfc-d30beef8e69d', '65dd06d5-bfb8-4b0c-8738-8547e7ee8062', 'buyer', 'C/O:. PARKE LEATHERMAN, 20 WEST 20TH STREET, UNIT 805, NEW YORK, NY, 10011', 'acris', '2024010400075001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('6bf7bc49-5fc8-4d16-abfc-d30beef8e69d', '9a05ccd8-c268-490b-94f2-4b0af8f7d7c3', 'seller', 'C/O:. PROVIDENT MANAGEMENT CORP., 1430 BROADWAY, SUITE 903, NEW YORK, NY, 10018', 'acris', '2024010400075001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -1201,8 +1206,8 @@ INSERT INTO public.deal_parties VALUES
 	('0102d3c6-df36-451b-8624-fb088a68efc5', 'fabf5895-9251-4138-a320-476db6b6254c', 'buyer', NULL, 'traded', 'https://traded.co/deals/new-york/hotel/sale/29-11-39th-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('0102d3c6-df36-451b-8624-fb088a68efc5', '233b4ccd-8e89-4379-899c-4907dff10c33', 'seller', '200 South Biscayne Blvd, Suite 3550, Miami, FL 33131', 'traded', 'https://traded.co/deals/new-york/hotel/sale/29-11-39th-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('676d2879-8d1a-4988-ac28-704efc9109b0', '93ab7708-44e9-4c5c-aa03-1152a3229a72', 'buyer', '24 W. 25th Street, 11th Floor, New York, NY 10010', 'traded', 'https://traded.co/deals/new-york/hotel/sale/714-7th-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('676d2879-8d1a-4988-ac28-704efc9109b0', '23cbeb97-a8bd-41fd-a82b-5ac933a18ee2', 'seller', '745 Fifth Avenue, Suite 1707, New York, NY 10151', 'traded', 'https://traded.co/deals/new-york/hotel/sale/714-7th-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.deal_parties VALUES
+	('676d2879-8d1a-4988-ac28-704efc9109b0', '23cbeb97-a8bd-41fd-a82b-5ac933a18ee2', 'seller', '745 Fifth Avenue, Suite 1707, New York, NY 10151', 'traded', 'https://traded.co/deals/new-york/hotel/sale/714-7th-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.deal_parties (deal_id,entity_id,role,mailing_address,source_system,provenance_ref,amount_gate_passed,verified_deed_amount,match_confidence,created_at) VALUES
 	('caefbc4a-0ed7-4f68-8ef6-188d1163c1a5', '537e6100-b431-45c3-8d1d-5b79a7c696a8', 'seller', '420 Great Neck Road, Great Neck, NY 11021', 'traded', 'https://traded.co/deals/new-york/hotel/sale/33-west-37th-street/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('de8da7bd-25a9-4ed3-bcd8-96897b544519', 'b10b1879-6f78-4247-89c2-cd701f7bc377', 'buyer', '9 Park Place, Third Floor, Great Neck, NY 11021', 'traded', 'https://traded.co/deals/new-york/retail/sale/446-west-14th-street/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('de8da7bd-25a9-4ed3-bcd8-96897b544519', '7976e062-5d07-41b7-9169-7a45687ce8cb', 'seller', '330 Madison Avenue, 39th Floor, New York, NY 10017', 'traded', 'https://traded.co/deals/new-york/retail/sale/446-west-14th-street/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -1502,8 +1507,8 @@ INSERT INTO public.deal_parties VALUES
 	('a4db6d38-7596-47c2-92fe-8925e0ea6f79', '7b2cbcd9-aab4-46fc-bc75-d1e0c3b8bcb5', 'buyer', '240 WATER STREET, BROOKLYN, NY, 11201', 'acris', '2026031700959001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('a4db6d38-7596-47c2-92fe-8925e0ea6f79', '26394a38-4004-44b4-bec1-d02fc46d4773', 'seller', '590 MADISON AVENUE, 33RD FLOOR, NEW YORK, NY, 10022', 'acris', '2026031700959001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('6dd3a8c6-decd-4ab4-b882-304705c43762', 'b77e0cba-2eb1-40b7-b8fe-89b6396675ce', 'buyer', '444 MIDDLE NECK ROAD, APT SUPT,, GREAT NECK, NY, 11023', 'acris', '2026031700379001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('6dd3a8c6-decd-4ab4-b882-304705c43762', '3758894e-5cdf-401d-baf5-a2f653ab5dff', 'seller', '215 CHELSEA ROAD, WHITE PLAINS, NY, 10603', 'acris', '2026031700379001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.deal_parties VALUES
+	('6dd3a8c6-decd-4ab4-b882-304705c43762', '3758894e-5cdf-401d-baf5-a2f653ab5dff', 'seller', '215 CHELSEA ROAD, WHITE PLAINS, NY, 10603', 'acris', '2026031700379001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.deal_parties (deal_id,entity_id,role,mailing_address,source_system,provenance_ref,amount_gate_passed,verified_deed_amount,match_confidence,created_at) VALUES
 	('d7a36cd3-c1eb-4d22-97de-a79f50933e20', 'b31ee470-5a21-4236-bb6a-75e012ca6326', 'buyer', '20 PINE STREET, APT. 704, NEW YORK, NY, 10005', 'acris', '2026031600155001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('d7a36cd3-c1eb-4d22-97de-a79f50933e20', '0380021d-9fa9-423e-8746-025eab51eb2c', 'seller', '21 OVERLOOK ROAD, GREAT NECK, NY, 11020', 'acris', '2026031600155001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('a238b194-a71a-4449-9d2c-5bfadf2d89d2', 'a1576c85-c38a-45f9-ae0f-ca99e4e55cf1', 'buyer', 'A NEW YORK LIMITED LIABILITY COMPANY, 670 MYRTLE AVENUE #6449, BROOKLYN, NY, 11205', 'acris', '2026031600568001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -1621,8 +1626,8 @@ INSERT INTO public.deal_parties VALUES
 	('e64c5b43-f587-4ade-b454-f43848557ee2', 'd067134c-5ac3-4e19-8e82-bbe10205134a', 'buyer', NULL, 'traded', 'https://traded.co/deals/new-york/mixed-use/sale/457-schenectady-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('e64c5b43-f587-4ade-b454-f43848557ee2', '3f3e6477-6f85-4ef5-a760-8498a5ed11b7', 'seller', NULL, 'traded', 'https://traded.co/deals/new-york/mixed-use/sale/457-schenectady-avenue/', NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('beec4a93-ff8a-4295-b2bf-bb18958f2ac1', 'e2d1fd56-aa6b-45e1-ae70-3791aab1dccf', 'buyer', 'C/O: TOWNHOUSE MANAGEMENT COMPANY, 556 THIRD AVENUE, LOBBY SUITE, NEW YORK, NY, 10016', 'acris', '2026031900846001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('beec4a93-ff8a-4295-b2bf-bb18958f2ac1', 'ac4cd916-686a-4855-be66-bd070b60912a', 'seller', '556 THIRD AVENUE, LOBBY SUITE, NEW YORK, NY, 10016', 'acris', '2026031900846001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.exclusion_ledger VALUES
+	('beec4a93-ff8a-4295-b2bf-bb18958f2ac1', 'ac4cd916-686a-4855-be66-bd070b60912a', 'seller', '556 THIRD AVENUE, LOBBY SUITE, NEW YORK, NY, 10016', 'acris', '2026031900846001', true, NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.exclusion_ledger (addr_norm,price,reason,evidence,created_at) VALUES
 	('383 w end ave', 5267500, 'one_two_family', 'PLUTO class=[''B1''] units=[''2''] BBL=1011860076.00000000 - 1-2 family dwelling (user rule 2026-07-02)', '2026-07-06 16:03:02.062987+00'),
 	('273 hicks st', 9995000, 'one_two_family', 'PLUTO class=[''B1''] units=[''2''] BBL=3002610021.00000000 - 1-2 family dwelling (user rule 2026-07-02)', '2026-07-06 16:03:02.062987+00'),
 	('576 carroll st', 3745000, 'one_two_family', 'PLUTO class=[''B3''] units=[''2''] BBL=3009610012.00000000 - 1-2 family dwelling (user rule 2026-07-02)', '2026-07-06 16:03:02.062987+00'),
@@ -1652,8 +1657,8 @@ INSERT INTO public.exclusion_ledger VALUES
 	('38 e 3 st', 1587959, 'one_two_family_unverified_pluto', 'dataset units=1.0 uncontradicted (PLUTO no address match); units<=2 residential', '2026-07-06 16:03:02.062987+00'),
 	('35 hudson yards', 7700000, 'one_two_family_unverified_pluto', 'dataset units=1.0 uncontradicted (PLUTO no address match); units<=2 residential', '2026-07-06 16:03:02.062987+00'),
 	('39 e 79 st', 23600000, 'one_two_family_unverified_pluto', 'dataset units=1.0 uncontradicted (PLUTO no address match); units<=2 residential', '2026-07-06 16:03:02.062987+00'),
-	('1 w 72 st', 22500000, 'one_two_family_unverified_pluto', 'dataset units=1.0 uncontradicted (PLUTO no address match); units<=2 residential', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.review_queue VALUES
+	('1 w 72 st', 22500000, 'one_two_family_unverified_pluto', 'dataset units=1.0 uncontradicted (PLUTO no address match); units<=2 residential', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.review_queue (review_id,object_type,object_id,issue_class,severity,payload,status,resolved_by,resolved_at,created_at) VALUES
 	('a63e9e81-c6e5-4e78-a16c-e2aff2dc0470', 'deal', '2653b334-e784-4713-ad81-cfcd45022497', 'legacy_needs_review', 'normal', '{"notes": "Imported from Traded.co sale transaction feed | RollingSales(usep-8jbt): units 1", "address": "1528 Williamsbridge Road"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('d9c304e9-6587-4a25-a94e-7c3ae1f5300b', 'deal', 'f1038844-1b74-4a37-b34e-013854c5f74b', 'legacy_needs_review', 'normal', '{"notes": "Imported from Traded.co sale transaction feed", "address": "51 East 193rd Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('6487f4d2-abba-4654-a410-74cb69c8fd0c', 'deal', '1d5592a2-a53c-4cec-9dd0-e3e5ee22f312', 'legacy_needs_review', 'normal', '{"notes": "Imported from Traded.co sale transaction feed", "address": "89-03 57th Avenue"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -1953,8 +1958,8 @@ INSERT INTO public.review_queue VALUES
 	('2d06c1f5-d03e-417b-975c-331f55c13ec6', 'deal', '66690efe-9382-4d7a-be9c-07d441ebc36c', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "247 Starr Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('e6dd1942-86b2-4e10-a6aa-9b1da9bb3745', 'deal', 'ba37c534-bf77-4ed4-bbee-03ff9060832f', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "111 North Broadway"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('dc7e4340-d5f6-4fe2-af47-fa0f5b490552', 'deal', 'cf747106-d49c-44fd-a188-5bcb4c98d4a0', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "44 Lefferts Place"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('8b1eb6a3-2f23-459a-bd67-cdfa4f85692a', 'deal', '60f9c5d2-3056-4bf0-b01b-acb0b3085e58', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "112 West 13th Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.review_queue VALUES
+	('8b1eb6a3-2f23-459a-bd67-cdfa4f85692a', 'deal', '60f9c5d2-3056-4bf0-b01b-acb0b3085e58', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "112 West 13th Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.review_queue (review_id,object_type,object_id,issue_class,severity,payload,status,resolved_by,resolved_at,created_at) VALUES
 	('aad01c2d-7193-4b8d-aa64-f5ce39dafd75', 'deal', '6eb27cc9-b41a-41bc-95ca-825f4f8700a0', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "650 Baltic Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('f6abe72e-0e0d-4320-bcdf-5b8c84900ea8', 'deal', '7cb0bb2f-0303-4ef0-a923-3fdb41324c24', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "2323 1st Avenue"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('899b1365-a6cc-4ac2-994d-23dc03f5db61', 'deal', 'c2f28c02-9781-4332-bcce-2c78db0b9d6f', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "117 West 70th Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -2009,4 +2014,6 @@ INSERT INTO public.review_queue VALUES
 	('c938a43d-ca5e-4601-a8dc-d5ba41a2bd9d', 'deal', '2c3b54f7-8ee2-4b72-a1fc-4de1f32a7876', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport) | parties from ACRIS 2026051800826001 (amount-gated)", "address": "905 Tiffany Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('54bd02f8-1ea2-424a-b6c2-c41c662140dc', 'deal', '5cbfdafa-c9ba-4ddb-b94c-d8aad622809a', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport) | Borough conflict: caption=Bronx vs zip=Manhattan; used Bronx", "address": "44 East 32nd Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
 	('c898d7fa-8e12-4b32-98fc-5b7d4bab200d', 'deal', 'beec4a93-ff8a-4295-b2bf-bb18958f2ac1', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport) | parties from ACRIS 2026031900846001 (amount-gated)", "address": "35 East 63rd Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00'),
-	('c52927b8-b214-4712-aaac-03280772230c', 'deal', 'e2e35296-1de6-4e85-863f-042ab36bdf97', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "188 Montague Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00');
+	('c52927b8-b214-4712-aaac-03280772230c', 'deal', 'e2e35296-1de6-4e85-863f-042ab36bdf97', 'legacy_needs_review', 'normal', '{"notes": "Backfilled from traded.co sitemap (curl_cffi transport)", "address": "188 Montague Street"}', 'open', NULL, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+
+COMMIT;
