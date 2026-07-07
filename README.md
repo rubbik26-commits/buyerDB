@@ -21,16 +21,22 @@ scripts/   CSV → Postgres migration + assertions
 > workflows live at the repo root (`.github/workflows/`) and are already
 > path-adjusted for this nesting.
 >
-> **One host is not enough.** This is a four-part system and each part has its
-> own home. Netlify (or Vercel) hosts **only** the static frontend — the
-> included `netlify.toml` builds `skyline/frontend` automatically; set
-> `VITE_API_URL` in the Netlify site's environment variables to the backend's
-> public URL. The FastAPI backend runs on Render/Railway (with the `.env`
-> variables from `skyline/.env.example`), Postgres runs on Supabase (apply the
-> two migrations, then load the CSV with `scripts/migrate_csv.py`), and the
-> scraper worker runs on GitHub Actions using repo Secrets (`DATABASE_URL`
-> etc.). Deploying only the frontend gives you a UI that reports “Can’t reach
-> the API” — that is expected until the backend and database are up.
+> **Current production topology (2026-07-06, decisions D-008/D-010):**
+> Netlify hosts the static frontend at **buyerdb.netlify.app**, built in **RPC
+> mode** — the bundle talks straight to Supabase PostgREST (`api_*` functions,
+> migration 004) with the public anon key, so the data tabs need **no separate
+> backend**. Postgres runs on Supabase (apply `database/migrations/001–009`,
+> then load the CSV with `scripts/migrate_csv.py`). The daily refresh is
+> **Supabase-native**: pg_cron fires the edge functions in
+> `skyline/supabase/functions/`, which write through `sync_upsert_deals()` —
+> the single SQL write path that enforces every invariant. See
+> `architecture/SOP-daily-refresh.md`.
+>
+> Optional extras: the FastAPI backend (Render/Railway via `render.yaml`,
+> `.env` from `skyline/.env.example`) enables uploads, entity merges, and the
+> AI Deal Desk; the GitHub-Actions worker crons are a **legacy fallback**
+> scraper path, disabled unless the `ENABLE_LEGACY_WORKER` repo variable is
+> `true`.
 
 Why a backend is mandatory (not a preference): browsers can't run cron, a client bundle
 can't hold provider/scraper keys, the artifact's Anthropic call only works behind Claude.ai's
@@ -109,25 +115,38 @@ The router (`AI_PROVIDER_ORDER`, `AI_QUALITY_PROVIDER`) fails over on 429/5xx/ti
 pre-emptively skips a provider whose daily budget is spent, and logs every attempt
 (`provider`, `latency`, `fallback_from`, `status`) to `ai_logs`.
 
-## Scheduling (GitHub Actions, free tier)
+## Scheduling
+
+**Live path (Supabase-native, D-008/D-010):** pg_cron job `skyline-sync-daily`
+(07:40 UTC) plus the dealflow train fire the edge functions in
+`skyline/supabase/functions/` (acris-v2, traded-daily, crexi-run/-ingest,
+dos-enrich), which write through `sync_upsert_deals()`. Run state lands in
+`sync_state` and every function returns a full counters summary. Source of
+truth: `architecture/SOP-daily-refresh.md`.
+
+**Legacy fallback (GitHub Actions, disabled by default):** gated on the
+`ENABLE_LEGACY_WORKER` repo variable; `workflow_dispatch` always works.
 
 - `daily-incremental.yml` (`17 13 * * *`): traded discovery minus the fetch ledger → gated
   merge → fresh ACRIS window → rolling batch → keep-alive commit (defeats the 60-day
   schedule auto-disable) → fails loudly with a webhook alert.
 - `weekly-enrichment.yml` (`43 11 * * 0`): phase2 match → amount-gated apply; closes the
   7–8 week ACRIS party-recording lag as the window rolls.
-- `ci.yml`: spins a fresh Postgres, applies migrations, runs the full test suite, builds the
-  frontend, and fails if any secret pattern appears in `dist/`.
+- `ci.yml` (always on): spins a fresh Postgres, applies migrations, runs the full test
+  suite, builds the frontend, and fails if any secret pattern appears in `dist/`.
 
 curl_cffi bypasses traded.co's Cloudflare for free on the Python runner; a JS/Deno host would
-need ScraperAPI (~11 credits per protected page). That's why the worker stays Python.
+need ScraperAPI (~11 credits per protected page). That's why the fallback worker stays Python
+(the live traded-daily edge function spends ScraperAPI credits instead).
 
 ## Deploy
 
-Frontend → Vercel/Netlify (static; set `VITE_API_URL`). Backend → Render/Railway (FastAPI
-container; set the backend env vars). Postgres → Supabase (Pro recommended for backups and
-no idle-pause). Worker → GitHub Actions (private repo; set repo Secrets). Estimated cost:
-$0 prototype → ~$32–42/mo production.
+Frontend → Netlify (static, RPC mode; `netlify.toml` at repo root — production is
+buyerdb.netlify.app, with a GitHub Pages mirror via `deploy-frontend.yml`).
+Postgres → Supabase (Pro recommended for backups and no idle-pause). Optional:
+Backend → Render/Railway (FastAPI via `render.yaml`; then point `VITE_API_URL` at it),
+legacy worker → GitHub Actions (set `DATABASE_URL` secret + `ENABLE_LEGACY_WORKER=true`).
+Estimated cost: $0 prototype → ~$32–42/mo production.
 
 ## Acceptance evidence (this build)
 

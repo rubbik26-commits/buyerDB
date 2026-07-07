@@ -36,7 +36,14 @@ jobs:
       - name: Extensions + schema
         run: |
           psql "$DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
-          for f in database/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
+          # Supabase-managed roles that the migrations GRANT/REVOKE against —
+          # without them the grants error and (with no ON_ERROR_STOP) those
+          # errors used to scroll by silently.
+          psql "$DATABASE_URL" -c "CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;"
+          for f in database/migrations/*.sql; do
+            echo "== $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: Load canonical dataset (agent tests query real rows)
         run: |
           python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
@@ -48,4 +55,6 @@ jobs:
         run: |
           npm ci
           npm run build
-          ! grep -rqiE "sk-[A-Za-z0-9]{16,}|gsk_[A-Za-z0-9]{16,}|postgres(ql)?://" dist/ || (echo "SECRET IN BUNDLE" && exit 1)
+          # service_role / sb_secret_ are the key classes that must never ship
+          # client-side (the anon key is in the bundle by design)
+          ! grep -rqiE "sk-[A-Za-z0-9]{16,}|gsk_[A-Za-z0-9]{16,}|postgres(ql)?://|service_role|sb_secret_" dist/ || (echo "SECRET IN BUNDLE" && exit 1)

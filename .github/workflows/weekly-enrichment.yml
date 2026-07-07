@@ -1,5 +1,7 @@
 name: weekly-enrichment
 
+# LEGACY FALLBACK (decisions D-008/D-010) — gated like daily-incremental on the
+# ENABLE_LEGACY_WORKER repo variable; workflow_dispatch always works.
 # Sunday ~06:43 ET. Closes the 7–8 week ACRIS party-recording lag as the window
 # rolls forward: phase2 matches missing parties, apply_enrichment writes them ONLY
 # through the amount gate (|deed − price|/price ≤ 3%, or no-price + ≤60d).
@@ -20,6 +22,7 @@ defaults:
 jobs:
   enrichment:
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_LEGACY_WORKER == 'true'
     timeout-minutes: 120
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -55,4 +58,3 @@ jobs:
             curl -s -X POST "$ALERT_WEBHOOK_URL" -H 'Content-Type: application/json' \
               -d "{\"text\":\"Skyline weekly-enrichment FAILED: run ${{ github.run_id }}\"}" || true
           fi
-          exit 1

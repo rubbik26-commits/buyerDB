@@ -1,9 +1,10 @@
 name: deploy-frontend
 
-# Builds the static frontend and publishes it to GitHub Pages at
-# https://rubbik26-commits.github.io/buyerDB/ by pushing the build output to
-# the gh-pages branch (Pages serves that branch; this avoids the Pages API,
-# which workflow tokens are not allowed to call on this repo).
+# MIRROR deploy: production is buyerdb.netlify.app (Netlify builds from this
+# repo via netlify.toml). This publishes the same bundle to GitHub Pages at
+# https://rubbik26-commits.github.io/buyerDB/ as a fallback URL by pushing the
+# build output to the gh-pages branch (Pages serves that branch; this avoids
+# the Pages API, which workflow tokens are not allowed to call on this repo).
 # The build points VITE_API_URL at the Supabase project, so the client runs in
 # RPC mode (PostgREST api_* functions from migration 004) — no separate backend
 # host needed for the data tabs. When the FastAPI backend is deployed later,
@@ -40,6 +41,7 @@ jobs:
         working-directory: skyline/frontend/dist
         run: |
           touch .nojekyll
+          cp index.html 404.html   # SPA deep links: Pages has no rewrite rule, 404.html is the fallback
           git init -b gh-pages
           git config user.name "skyline-bot"
           git config user.email "bot@skyline.local"

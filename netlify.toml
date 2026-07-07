@@ -1,7 +1,12 @@
-# Netlify deploys ONLY the static frontend (skyline/frontend). The FastAPI
-# backend and Postgres cannot run on Netlify — deploy them to Render/Railway
-# and Supabase respectively, then set VITE_API_URL (Site settings → Environment
-# variables) to the backend's public URL so the built bundle points at it.
+# Netlify deploys ONLY the static frontend (skyline/frontend), and this is the
+# PRODUCTION deploy (buyerdb.netlify.app). Two supported modes, chosen by the
+# VITE_API_URL env var (Site settings → Environment variables):
+#   RPC mode (current production): VITE_API_URL = https://<ref>.supabase.co —
+#     the bundle talks straight to Supabase PostgREST (migration 004 api_*
+#     functions); no backend host needed for the data tabs. Optionally set
+#     VITE_SUPABASE_ANON_KEY (the PUBLIC anon key — never service_role).
+#   Backend mode: VITE_API_URL = the FastAPI host's public URL (render.yaml)
+#     to enable uploads, entity merges, and the AI Deal Desk.
 [build]
   base = "skyline/frontend"
   command = "npm ci && npm run build"
@@ -12,3 +17,15 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # Allowlist only what the app actually loads: Supabase (data), Google Fonts
+    # (stylesheet + font files). frame-ancestors backs up X-Frame-Options.
+    # NOTE: switching to backend mode requires adding the backend host to
+    # connect-src here.
+    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'"
