@@ -93,25 +93,34 @@ The router (`AI_PROVIDER_ORDER`, `AI_QUALITY_PROVIDER`) fails over on 429/5xx/ti
 pre-emptively skips a provider whose daily budget is spent, and logs every attempt
 (`provider`, `latency`, `fallback_from`, `status`) to `ai_logs`.
 
-## Scheduling (GitHub Actions, free tier)
+## Scheduling
+
+**Live refresh (Supabase-native — decisions D-008/D-010):** pg_cron fires the edge
+functions in `supabase/functions/` (acris-v2, traded-daily, crexi-run/-ingest, dos-enrich),
+which write through `sync_upsert_deals()` — the one SQL path that enforces every invariant.
+Run state lands in `sync_state`. Source of truth: `../architecture/SOP-daily-refresh.md`.
+
+**Legacy fallback (GitHub Actions, disabled unless `ENABLE_LEGACY_WORKER=true`):**
 
 - `daily-incremental.yml` (`17 13 * * *`): traded discovery minus the fetch ledger → gated
   merge → fresh ACRIS window → rolling batch → keep-alive commit (defeats the 60-day
   schedule auto-disable) → fails loudly with a webhook alert.
 - `weekly-enrichment.yml` (`43 11 * * 0`): phase2 match → amount-gated apply; closes the
   7–8 week ACRIS party-recording lag as the window rolls.
-- `ci.yml`: spins a fresh Postgres, applies migrations, runs the full test suite, builds the
-  frontend, and fails if any secret pattern appears in `dist/`.
+- `ci.yml` (always on): spins a fresh Postgres, applies migrations, runs the full test suite,
+  builds the frontend, and fails if any secret pattern appears in `dist/`.
 
 curl_cffi bypasses traded.co's Cloudflare for free on the Python runner; a JS/Deno host would
-need ScraperAPI (~11 credits per protected page). That's why the worker stays Python.
+need ScraperAPI (~11 credits per protected page). That's why the fallback worker stays Python.
 
 ## Deploy
 
-Frontend → Vercel/Netlify (static; set `VITE_API_URL`). Backend → Render/Railway (FastAPI
-container; set the backend env vars). Postgres → Supabase (Pro recommended for backups and
-no idle-pause). Worker → GitHub Actions (private repo; set repo Secrets). Estimated cost:
-$0 prototype → ~$32–42/mo production.
+**Current production:** Frontend → Netlify (static, **RPC mode** — the bundle talks straight
+to Supabase PostgREST with the anon key, so the data tabs need no backend; `netlify.toml`).
+Postgres → Supabase (Pro recommended for backups and no idle-pause).
+**Optional:** Backend → Render/Railway (FastAPI via `render.yaml`; then point `VITE_API_URL`
+at it and add its host to the `netlify.toml` CSP) to enable uploads, entity merges, and the
+AI Deal Desk. Estimated cost: $0 prototype → ~$32–42/mo production.
 
 ## Acceptance evidence (this build)
 
@@ -122,6 +131,7 @@ $0 prototype → ~$32–42/mo production.
   returns the uploaded number with `source=upload:<id>`, linked to the buyer's real deal history.
   Verified end-to-end.
 - **C — provider failover:** `backend/tests/test_provider_router.py` — kill the primary, the
-  request succeeds via fallback, `fallback_from` is logged. 6/6 PASS.
+  request succeeds via fallback, `fallback_from` is logged; also covers unexpected-error
+  failover and the contact-data provider deny-list. 9/9 PASS.
 - **D — no secrets in the client bundle:** the built `dist/` references only `VITE_API_URL`; the
   precise secret-pattern scan is clean.
