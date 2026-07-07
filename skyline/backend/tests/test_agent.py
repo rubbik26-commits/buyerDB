@@ -16,14 +16,17 @@ class ScriptedRouter:
     def __init__(self, plan):
         self._plan = plan
         self.seen_synth_result = None
+        self.seen_synth_deny = None
 
-    def complete(self, messages, lane="fast", purpose="chat", json_mode=False, max_tokens=1200):
+    def complete(self, messages, lane="fast", purpose="chat", json_mode=False, max_tokens=1200,
+                 deny=()):
         if purpose == "plan":
             return {"text": json.dumps(self._plan), "provider": "scripted-fast",
                     "latency_ms": 1, "input_tokens": 1, "output_tokens": 1}
         # synthesize: echo a short grounded answer referencing the tool result it was given
         user = messages[-1]["content"]
         self.seen_synth_result = user
+        self.seen_synth_deny = deny
         return {"text": "Based on the rows: top candidate identified.", "provider": "scripted-quality",
                 "latency_ms": 1, "input_tokens": 1, "output_tokens": 1}
 
@@ -45,6 +48,9 @@ def test_best_buyer_pipeline(monkeypatch):
     # the synthesis step was actually handed the real rows
     assert "candidates" in r.seen_synth_result
     assert out["answer"].startswith("Based on the rows")
+    # behavioral rule 6: synthesis (which can embed contacts rows) must exclude
+    # providers that train on prompts
+    assert "gemini" in r.seen_synth_deny
 
 
 def test_phone_lookup_pipeline(monkeypatch):
@@ -60,7 +66,8 @@ def test_phone_lookup_pipeline(monkeypatch):
 def test_malformed_plan_falls_back_to_sql(monkeypatch):
     # planner returns prose around JSON — the extractor must still recover the object
     class MessyRouter(ScriptedRouter):
-        def complete(self, messages, lane="fast", purpose="chat", json_mode=False, max_tokens=1200):
+        def complete(self, messages, lane="fast", purpose="chat", json_mode=False, max_tokens=1200,
+                     deny=()):
             if purpose == "plan":
                 return {"text": 'Sure! ```json\n{"tool":"recent_changes","arguments":{"days":30}}\n```',
                         "provider": "x", "latency_ms": 1, "input_tokens": 1, "output_tokens": 1}

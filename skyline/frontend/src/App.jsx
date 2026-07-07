@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { api, money, num } from "./api/client.js";
-import { Loading, ErrorBanner } from "./components/ui.jsx";
+import { api, IS_RPC_MODE, money, num } from "./api/client.js";
+import { Loading } from "./components/ui.jsx";
 import Deals from "./views/Deals.jsx";
 import Buyers from "./views/Buyers.jsx";
 import Leaderboards from "./views/Leaderboards.jsx";
@@ -22,7 +22,9 @@ export default function App() {
   const [meta, setMeta] = useState(null);
   const [err, setErr] = useState(null);
 
-  const loadMeta = () => api.meta().then(setMeta).catch(setErr);
+  // clear any previous failure first: a transient error banner used to stick
+  // forever even after a later refreshMeta() succeeded
+  const loadMeta = () => { setErr(null); return api.meta().then(setMeta).catch(setErr); };
   useEffect(() => { loadMeta(); }, []);
 
   const Active = TABS.find((t) => t.id === tab).C;
@@ -54,7 +56,7 @@ export default function App() {
           <div className="k">DATASET</div>
           <div className="v">{s ? num(s.deals) + " deals" : "…"}</div>
           <div className="k" style={{ marginTop: 8 }}>COVERAGE</div>
-          <div className="v">{s ? `${String(s.earliest).slice(0,4)}–${String(s.latest).slice(0,4)}` : "…"}</div>
+          <div className="v">{s && s.earliest ? `${String(s.earliest).slice(0,4)}–${String(s.latest).slice(0,4)}` : "—"}</div>
         </div>
       </aside>
 
@@ -71,8 +73,11 @@ export default function App() {
         {err && (
           <div className="content">
             <div className="banner err">
-              Can’t reach the API at <code>{api.base}</code>. Start the backend
-              (<code>uvicorn backend.app.main:app</code>) or set <code>VITE_API_URL</code>. — {String(err.message || err)}
+              Can’t reach the API at <code>{api.base}</code>.{" "}
+              {IS_RPC_MODE
+                ? "The Supabase project may be paused or unreachable — check its status."
+                : <>Start the backend (<code>uvicorn backend.app.main:app</code>) or set <code>VITE_API_URL</code>.</>}
+              {" — "}{String(err.message || err)}
             </div>
           </div>
         )}

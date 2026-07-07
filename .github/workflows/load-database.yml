@@ -38,20 +38,37 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
 
-      - name: Apply migrations (skips ones already applied)
+      - name: Apply migrations (tolerates already-applied, fails on real errors)
         run: |
+          # ON_ERROR_STOP so psql cannot keep executing past an error inside a
+          # file. A migration whose objects already exist is expected on re-run
+          # and skipped; ANY other failure (syntax, permissions, missing
+          # dependency) fails the job instead of silently proceeding against a
+          # half-migrated schema.
           for f in database/migrations/*.sql; do
             echo "== $f"
-            psql "$DATABASE_URL" -f "$f" || echo "   (already applied — continuing)"
+            if OUT=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" 2>&1); then
+              echo "   applied"
+            elif echo "$OUT" | grep -qE "already exists"; then
+              echo "   (already applied — continuing)"
+            else
+              echo "$OUT"
+              echo "::error::migration $f failed"
+              exit 1
+            fi
           done
 
       - name: Wipe Skyline tables (force_reload only)
         if: inputs.force_reload
         run: |
+          # app_config deliberately survives (it holds the sync secrets);
+          # sync_state must NOT survive — stale watermarks would mislead the
+          # first post-reload sync run.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
             TRUNCATE deal_parties, rolling_ledger, deals, contacts, interactions,
                      entity_aliases, entities, upload_rows, uploads, properties,
-                     review_queue, fetch_ledger, exclusion_ledger, scrape_runs, ai_logs;"
+                     review_queue, fetch_ledger, exclusion_ledger, scrape_runs, ai_logs,
+                     sync_state;"
 
       - name: Load canonical CSV (refuses if deals already has rows)
         run: |

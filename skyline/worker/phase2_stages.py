@@ -70,13 +70,18 @@ def lookup_legals(address, borough, soql_fn=None):
     tok = key_token(name or "")
     if not num or not tok or borough not in BOROUGH_CODE:
         return None
+    # SoQL quote-escaping: an apostrophe street (O'CALLAHAN) makes the query 400
+    # and silently counts as no_legals forever — the exact "O'Callahan quote bug"
+    # shared/normalize.py's docstring records as already learned once.
+    num_esc, tok_esc = str(num).replace("'", "''"), str(tok).replace("'", "''")
     try:
         rows = soql_fn(LEGALS, {
             "$select": "document_id,street_number,street_name,borough,block,lot,property_type",
-            "$where": f"street_number='{num}' AND borough='{BOROUGH_CODE[borough]}' "
-                      f"AND street_name like '%{tok}%'",
+            "$where": f"street_number='{num_esc}' AND borough='{BOROUGH_CODE[borough]}' "
+                      f"AND street_name like '%{tok_esc}%'",
             "$limit": "5000"})
-    except Exception:
+    except Exception as e:
+        print(f"lookup_legals failed for {address!r}: {type(e).__name__}: {e}", file=sys.stderr)
         return None
     hits = [r for r in rows if canon_street(r.get("street_name")) == name]
     if not hits:
@@ -84,11 +89,21 @@ def lookup_legals(address, borough, soql_fn=None):
     return {r["document_id"] for r in hits}, hits[0]
 
 
+def _fetch_masters_chunked(ids, chunk=150):
+    """Chunked like acris_enrich.fetch_parties/fetch_legals — a popular street
+    name can return enough doc_ids to blow the SoQL URL length (Socrata 400)."""
+    out = {}
+    for i in range(0, len(ids), chunk):
+        batch = ids[i:i + chunk]
+        for m in soql_all(
+                MASTER, f"document_id IN ({','.join(repr(d) for d in batch)}) AND doc_type IN {DEED_TYPES}",
+                "document_id ASC", select="document_id,document_amt,document_date,doc_type"):
+            out[m["document_id"]] = m
+    return out
+
+
 def fetch_deed_masters(doc_ids, masters_fn=None):
-    masters_fn = masters_fn or (lambda ids: {
-        m["document_id"]: m for m in soql_all(
-            MASTER, f"document_id IN ({','.join(repr(d) for d in ids)}) AND doc_type IN {DEED_TYPES}",
-            "document_id ASC", select="document_id,document_amt,document_date,doc_type")})
+    masters_fn = masters_fn or _fetch_masters_chunked
     return masters_fn(list(doc_ids)) if doc_ids else {}
 
 
@@ -100,7 +115,9 @@ def match_target(target, docs, masters):
         return None
     sd = target["sale_date"]
     price = target["sale_price"]
-    if price is not None:
+    # A non-NULL zero price is a no-price deal (amount_gate semantics), not a
+    # divide-by-zero waiting to abort the whole run.
+    if price is not None and float(price) > 0:
         price = float(price)
         cands = [m for m in deeds if abs(float(m["document_amt"]) - price) / price <= 0.03]
         if not cands:

@@ -50,18 +50,22 @@ def resolve(cur, name, address=None):
     # 4. property-context boost
     if address:
         anorm = normalize_address(address)
-        cur.execute("""SELECT DISTINCT e.entity_id, e.display_name
+        cur.execute("""SELECT DISTINCT e.entity_id, e.display_name, e.is_spv_suspect
                        FROM properties p JOIN deals d USING (property_id)
                        JOIN deal_parties dp USING (deal_id) JOIN entities e USING (entity_id)
                        WHERE p.address_norm=%s""", (anorm,))
-        ctx = {str(x[0]): x[1] for x in cur.fetchall()}
+        ctx = {str(x[0]): (x[1], x[2]) for x in cur.fetchall()}
         for c in cands:
             if c["entity_id"] in ctx:
                 c["score"] += 1.0
                 c["reason"] = "trgm+property_context"
-        for eid, disp in ctx.items():
+        for eid, (disp, spv) in ctx.items():
             if eid not in {c["entity_id"] for c in cands}:
-                cands.append({"entity_id": eid, "display_name": disp, "is_spv_suspect": False,
+                # context candidates bypass the SPV filter by design (they WERE
+                # a party at this address), but the flag shown to the reviewer
+                # must be the real one — a hardcoded False hid exactly the
+                # entities the boost promotes
+                cands.append({"entity_id": eid, "display_name": disp, "is_spv_suspect": bool(spv),
                               "score": 0.9, "reason": "property_context"})
         cands.sort(key=lambda c: c["score"], reverse=True)
 

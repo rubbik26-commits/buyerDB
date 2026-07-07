@@ -24,7 +24,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from traded_scraper import (_extract_next_data, _find_deal_nodes,
-                            _parse_traded_title, _clean_party)
+                            _parse_traded_title, _clean_party,
+                            _party_name_from as party_name_from,
+                            CAPTION_PATTERNS)
 from acris_enrich import is_placeholder
 
 from curl_cffi import requests as cffi
@@ -46,19 +48,8 @@ def fetch_html(url):
         raise RuntimeError("cloudflare_challenge_body")
     return r.text
 
-# ── structured party extraction (port of partyNameFrom) ──────────────────────
-def party_name_from(deal, role):
-    grp = deal.get("buyers") if role == "buyer" else deal.get("sellers")
-    if not isinstance(grp, dict):
-        return None
-    arr = grp.get("profileDealCompanies") or grp.get("edges")
-    if not isinstance(arr, list) or not arr:
-        return None
-    hit = next((x for x in arr if (x.get("role") or (x.get("node") or {}).get("role")) == role), arr[0])
-    p = hit.get("profile") or (hit.get("node") or {}).get("profile") or hit.get("node")
-    if isinstance(p, dict) and p.get("name"):
-        return str(p["name"]).strip()
-    return None
+# party_name_from is traded_scraper._party_name_from — this module used to carry
+# a byte-for-byte copy, the documented "one implementation" error class.
 
 def pick_field(o, keys):
     for k in keys:
@@ -212,23 +203,44 @@ def map_deal(html_text, url):
         asset = ASSET_NORMALIZE.get(str(asset).strip().lower(), str(asset).strip())
     if asset and RESIDENTIAL_REJECT.search(str(asset)):
         return None, f"residential_asset:{asset}"
-    sale_date = clean_sale_date(pick_field(deal, ["closingDate", "closing_date", "date", "publishedAt", "createdAt"]), title)
+    # Closing-date fields + caption recovery only. publishedAt/createdAt are
+    # article timestamps — a deal written up months after closing would get a
+    # fabricated sale date presented as fact.
+    sale_date = clean_sale_date(pick_field(deal, ["closingDate", "closing_date", "date"]), title)
+    units = pick_field(deal, ["totalUnitsDeal", "totalUnits", "units"])
+    try:
+        units = int(float(units)) if units else None
+    except (TypeError, ValueError):
+        units = None
+    if units is None:
+        m_units = CAPTION_PATTERNS["units"].search(title)
+        if m_units:
+            try:
+                units = int(m_units.group(1).replace(",", ""))
+            except ValueError:
+                units = None
+    if units is not None and units <= 0:
+        units = None
     conf = 20 + (25 if price else 0) + (20 if buyer else 0) + (15 if seller else 0) + (10 if sale_date else 0)
     return {
         "Sale Date": sale_date, "sale_date_iso": sale_date, "Address": address,
         "Market": (market or (borough.lower() if borough else None)), "Borough": borough,
         "Asset Type": asset, "Buyer": buyer, "Seller": seller,
-        "Sale Price": price, "Sq Ft": sqft,
+        "Sale Price": price, "Units": units, "Sq Ft": sqft,
         "PPSF": round(price / sqft) if price and sqft else None,
         "Source URL": url, "Shortcode": "TRADED-" + url.rstrip("/").split("/")[-1],
         "Confidence": min(100, conf),
         "Parse Status": "needs_review" if (conflict or conf < 60) else "ok",
-        "Notes": ("Backfilled from traded.co sitemap (curl_cffi transport)"
+        "Notes": ("parsed from traded.co deal page (curl_cffi transport)"
                   + (f" | {note}" if note else "")),
     }, "ok"
 
 
 def run(batch_size):
+    # STANDALONE-LEGACY path: pickle checkpoints predate the ledger-as-table
+    # invariant and survive only for the one-off historical backfill runner.
+    # The live daily path (run_incremental) imports fetch_html/map_deal only and
+    # records every disposition in fetch_ledger.
     ordered = pickle.load(open(f"{D}/backlog.pkl", "rb"))
     done = pickle.load(open(f"{D}/backfill_done.pkl", "rb")) if os.path.exists(f"{D}/backfill_done.pkl") else {}
     rows = pickle.load(open(f"{D}/backfill_rows.pkl", "rb")) if os.path.exists(f"{D}/backfill_rows.pkl") else []
@@ -247,6 +259,10 @@ def run(batch_size):
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
         for i, f in enumerate(as_completed([ex.submit(job, t) for t in todo])):
             u, status, row = f.result()
+            if status.startswith("fetch_error:"):
+                # transient (Cloudflare/network): leave the URL in the backlog
+                # so a later batch retries it instead of consuming it forever
+                continue
             done[u] = status
             if row:
                 rows.append(row)

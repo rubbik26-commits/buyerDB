@@ -1,7 +1,11 @@
 name: daily-incremental
 
+# LEGACY FALLBACK (decisions D-008/D-010): the live refresh is pg_cron ->
+# Supabase edge functions -> sync_upsert_deals(). This worker path stays as the
+# free curl_cffi transport fallback. The scheduled run is gated on the
+# ENABLE_LEGACY_WORKER repo variable so it doesn't burn a red run + failure
+# email every day while DATABASE_URL is unset; workflow_dispatch always works.
 # Runs ~09:17 ET on an odd minute (GitHub cron is best-effort; :00 is the worst slot).
-# workflow_dispatch lets you (or an external pinger) trigger it on demand.
 on:
   schedule:
     - cron: "17 13 * * *"
@@ -11,6 +15,10 @@ concurrency:
   group: skyline-incremental
   cancel-in-progress: false
 
+# The keep-alive step pushes a commit; the default GITHUB_TOKEN is read-only.
+permissions:
+  contents: write
+
 # The app lives under skyline/ in this repository.
 defaults:
   run:
@@ -19,6 +27,7 @@ defaults:
 jobs:
   incremental:
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_LEGACY_WORKER == 'true'
     timeout-minutes: 30
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -80,4 +89,3 @@ jobs:
               -H 'Content-Type: application/json' \
               -d "{\"text\":\"Skyline daily-incremental FAILED: run ${{ github.run_id }}\"}" || true
           fi
-          exit 1

@@ -25,6 +25,9 @@ def _mk(cur, tag, sqft, units, price):
 @pytest.fixture()
 def tag():
     t = "rs" + uuid.uuid4().hex[:8]
+    conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
+    cur.execute("SELECT now()"); t0 = cur.fetchone()[0]
+    conn.close()
     yield t
     conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
     cur.execute("""DELETE FROM review_queue WHERE object_id IN
@@ -36,7 +39,8 @@ def tag():
     cur.execute("""DELETE FROM deals WHERE property_id IN
                    (SELECT property_id FROM properties WHERE address_raw ILIKE %s)""", (f"%{t}%",))
     cur.execute("DELETE FROM properties WHERE address_raw ILIKE %s", (f"%{t}%",))
-    cur.execute("DELETE FROM scrape_runs WHERE job='rolling-sales'")
+    # only this test's runs — never the shared DB's cron-run audit trail
+    cur.execute("DELETE FROM scrape_runs WHERE job='rolling-sales' AND started_at >= %s", (t0,))
     conn.commit(); conn.close()
 
 

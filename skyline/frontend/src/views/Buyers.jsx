@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, money, num, shortDate } from "../api/client.js";
 import { Pill, Loading, Empty, ErrorBanner, EntityDrawer } from "../components/ui.jsx";
 
@@ -11,11 +11,15 @@ export default function Buyers({ meta }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [drawer, setDrawer] = useState(null);
+  const seqRef = useRef(0);
 
   const load = useCallback(() => {
+    const seq = ++seqRef.current; // clicking 1+ -> 3+ -> 5+ fast must show 5+ results, not whichever landed last
     setLoading(true); setErr(null);
     api.buyers({ borough, asset_type: asset, rank_by: rankBy, min_deals: minDeals, limit: 60 })
-      .then(setData).catch(setErr).finally(() => setLoading(false));
+      .then((d) => { if (seq === seqRef.current) setData(d); })
+      .catch((e) => { if (seq === seqRef.current) setErr(e); })
+      .finally(() => { if (seq === seqRef.current) setLoading(false); });
   }, [borough, asset, rankBy, minDeals]);
   useEffect(() => { load(); }, [load]);
 

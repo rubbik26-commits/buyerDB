@@ -14,10 +14,19 @@ to ai_logs (provider, latency, fallback_from, status) — errors are recorded, n
 swallowed. A provider whose in-process daily counter is exhausted is skipped
 pre-emptively (Groq does not expose RPD in headers — we count ourselves).
 """
-import os, time, json
+import os, time, json, threading
 from dataclasses import dataclass, field
 from typing import Optional
 import httpx
+
+# One pooled client for every adapter call — a fresh TCP+TLS handshake per
+# request doubled latency on the 2-call agent pipeline.
+_client = httpx.Client(timeout=30.0)
+
+# Providers that may train on prompts. Behavioral rule 6: uploaded contact data
+# must NEVER reach them — callers pass deny=SENSITIVE_DENY for any request whose
+# messages can embed contacts rows.
+SENSITIVE_DENY = ("gemini",)
 
 
 class ProviderError(Exception):
@@ -36,16 +45,24 @@ class Adapter:
     extra_headers: dict = field(default_factory=dict)
     _used_today: int = 0
     _day: str = ""
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
     def configured(self):
         return bool(os.environ.get(self.api_key_env))
 
     def _budget_ok(self):
-        today = time.strftime("%Y-%m-%d")
-        if today != self._day:
-            self._day, self._used_today = today, 0
-        return self._used_today < self.daily_budget
+        # FastAPI serves sync endpoints from a threadpool; the counter and the
+        # day rollover must not race.
+        with self._lock:
+            today = time.strftime("%Y-%m-%d")
+            if today != self._day:
+                self._day, self._used_today = today, 0
+            return self._used_today < self.daily_budget
+
+    def _count_use(self):
+        with self._lock:
+            self._used_today += 1
 
     def complete(self, messages, json_mode=False, max_tokens=1200, timeout=20.0):
         """OpenAI-compatible chat completion. Returns dict(text, input_tokens, output_tokens)."""
@@ -60,23 +77,28 @@ class Adapter:
             body["response_format"] = {"type": "json_object"}
         t0 = time.time()
         try:
-            r = httpx.post(f"{self.base_url}/chat/completions", headers=headers,
-                           json=body, timeout=timeout)
+            r = _client.post(f"{self.base_url}/chat/completions", headers=headers,
+                             json=body, timeout=timeout)
         except httpx.HTTPError as e:
             raise ProviderError(self.name, "network", str(e))
-        self._used_today += 1
+        self._count_use()
         if r.status_code == 429:
             raise ProviderError(self.name, "rate_limited", r.text[:200])
         if r.status_code >= 500:
             raise ProviderError(self.name, "server_error", f"HTTP {r.status_code}")
         if r.status_code != 200:
             raise ProviderError(self.name, "http_error", f"HTTP {r.status_code} {r.text[:200]}")
-        data = r.json()
-        usage = data.get("usage") or {}
-        return {"text": data["choices"][0]["message"]["content"],
-                "latency_ms": int((time.time() - t0) * 1000),
-                "input_tokens": usage.get("prompt_tokens"),
-                "output_tokens": usage.get("completion_tokens")}
+        # A 200 with an unexpected body (OpenRouter error envelopes, Cloudflare
+        # shape drift) must fail over like any other provider error, not 500.
+        try:
+            data = r.json()
+            usage = data.get("usage") or {}
+            return {"text": data["choices"][0]["message"]["content"],
+                    "latency_ms": int((time.time() - t0) * 1000),
+                    "input_tokens": usage.get("prompt_tokens"),
+                    "output_tokens": usage.get("completion_tokens")}
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise ProviderError(self.name, "bad_response", f"{type(e).__name__}: {r.text[:200]}")
 
 
 class AnthropicAdapter(Adapter):
@@ -93,24 +115,27 @@ class AnthropicAdapter(Adapter):
             body["system"] = system
         t0 = time.time()
         try:
-            r = httpx.post(f"{self.base_url}/v1/messages", json=body, timeout=timeout,
-                           headers={"x-api-key": os.environ[self.api_key_env],
-                                    "anthropic-version": "2023-06-01",
-                                    "Content-Type": "application/json"})
+            r = _client.post(f"{self.base_url}/v1/messages", json=body, timeout=timeout,
+                             headers={"x-api-key": os.environ[self.api_key_env],
+                                      "anthropic-version": "2023-06-01",
+                                      "Content-Type": "application/json"})
         except httpx.HTTPError as e:
             raise ProviderError(self.name, "network", str(e))
-        self._used_today += 1
+        self._count_use()
         if r.status_code == 429:
             raise ProviderError(self.name, "rate_limited", r.text[:200])
         if r.status_code >= 500:
             raise ProviderError(self.name, "server_error", f"HTTP {r.status_code}")
         if r.status_code != 200:
             raise ProviderError(self.name, "http_error", f"HTTP {r.status_code} {r.text[:200]}")
-        data = r.json()
-        text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
-        usage = data.get("usage") or {}
-        return {"text": text, "latency_ms": int((time.time() - t0) * 1000),
-                "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")}
+        try:
+            data = r.json()
+            text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+            usage = data.get("usage") or {}
+            return {"text": text, "latency_ms": int((time.time() - t0) * 1000),
+                    "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")}
+        except (ValueError, KeyError, TypeError) as e:
+            raise ProviderError(self.name, "bad_response", f"{type(e).__name__}: {r.text[:200]}")
 
 
 def default_adapters():
@@ -145,12 +170,17 @@ class Router:
     def _chain(self, env_var, default):
         return [n.strip() for n in os.environ.get(env_var, default).split(",") if n.strip()]
 
-    def complete(self, messages, lane="fast", purpose="chat", json_mode=False, max_tokens=1200):
+    def complete(self, messages, lane="fast", purpose="chat", json_mode=False, max_tokens=1200,
+                 deny=()):
+        """deny: provider names excluded from the chain for THIS request. Pass
+        SENSITIVE_DENY whenever the messages can embed contacts rows (behavioral
+        rule 6: no uploaded contact data to providers that train on prompts)."""
         chain = self._chain("AI_QUALITY_PROVIDER", "anthropic,openai") if lane == "quality" \
             else self._chain("AI_PROVIDER_ORDER", "groq,gemini,openrouter,cloudflare")
         if lane == "quality":
             chain += [n for n in self._chain("AI_PROVIDER_ORDER", "groq,gemini,openrouter,cloudflare")
                       if n not in chain]          # quality lane degrades to free lane, never dies silently
+        chain = [n for n in chain if n not in deny]
         errors, fallback_from = [], None
         for name in chain:
             ad = self.adapters.get(name)

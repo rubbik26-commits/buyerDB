@@ -28,6 +28,22 @@ def norm_entity(name):
     return re.sub(r"\s+", " ", n).strip() or None
 
 
+ENTITY_TYPE_LLC = re.compile(r"\bLLC\b")
+ENTITY_TYPE_CORP = re.compile(r"\b(INC|CORP|CORPORATION)\b")
+
+
+def entity_type(norm_name):
+    """Classify a normalized entity name. Word-boundary matching: a substring
+    check classified LINCOLN/PRINCETON/VINCENT names as corporations."""
+    if not norm_name:
+        return "unknown"
+    if ENTITY_TYPE_LLC.search(norm_name):
+        return "llc"
+    if ENTITY_TYPE_CORP.search(norm_name):
+        return "corp"
+    return "unknown"
+
+
 DIR = {"EAST": "E", "WEST": "W", "NORTH": "N", "SOUTH": "S"}
 SUF = {"STREET": "ST", "ST": "ST", "AVENUE": "AVE", "AVE": "AVE", "AV": "AVE",
        "BOULEVARD": "BLVD", "BLVD": "BLVD", "ROAD": "RD", "RD": "RD", "DRIVE": "DR", "DR": "DR",

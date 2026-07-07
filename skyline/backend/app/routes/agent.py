@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from ..services import agent_tools
 from ..services.ai import get_router
-from ..services.provider_router import ProviderError
+from ..services.provider_router import ProviderError, SENSITIVE_DENY
 
 router = APIRouter(prefix="/api")
 
@@ -55,11 +55,30 @@ Rules:
 - Be concise and direct. If the data is thin, say what's missing rather than padding."""
 
 
+class PlannerFailed(Exception):
+    """The planner produced no parseable {tool, arguments} object."""
+
+
+def _history_messages(history: List[dict]):
+    """Client history is untrusted: roles are whitelisted to user/assistant (the
+    frontend historically sent 'agent', and 'system' would override SYNTH_SYSTEM),
+    keys may be missing, and empty-content turns are dropped."""
+    msgs = []
+    for h in history[-6:]:
+        if not isinstance(h, dict):
+            continue
+        content = str(h.get("content") or "").strip()
+        if not content:
+            continue
+        msgs.append({"role": "user" if h.get("role") == "user" else "assistant",
+                     "content": content})
+    return msgs
+
+
 def _plan(question: str, history: List[dict]):
     router_ = get_router()
     msgs = [{"role": "system", "content": PLANNER_SYSTEM % _catalog()}]
-    for h in history[-6:]:
-        msgs.append({"role": h["role"], "content": h["content"]})
+    msgs += _history_messages(history)
     msgs.append({"role": "user", "content": question})
     out = router_.complete(msgs, lane="fast", purpose="plan", json_mode=True, max_tokens=400)
     raw = out["text"].strip()
@@ -67,21 +86,29 @@ def _plan(question: str, history: List[dict]):
     if "```" in raw:
         raw = raw.split("```")[1].replace("json", "", 1).strip() if raw.count("```") >= 2 else raw
     start, end = raw.find("{"), raw.rfind("}")
-    plan = json.loads(raw[start:end + 1]) if start >= 0 else {"tool": "run_readonly_sql",
-                                                              "arguments": {"sql": "SELECT 1"}}
+    if start < 0:
+        # answering the user's question from a fabricated `SELECT 1` result
+        # would be fabrication — fail explicitly instead
+        raise PlannerFailed(f"no JSON object in planner output: {raw[:200]!r}")
+    try:
+        plan = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise PlannerFailed(f"unparseable planner JSON: {e}") from e
     return plan, out.get("provider")
 
 
 def _synthesize(question: str, plan: dict, result: dict, history: List[dict]):
     router_ = get_router()
     msgs = [{"role": "system", "content": SYNTH_SYSTEM}]
-    for h in history[-6:]:
-        msgs.append({"role": h["role"], "content": h["content"]})
+    msgs += _history_messages(history)
     msgs.append({"role": "user", "content":
         f"Question: {question}\n\nTool used: {plan.get('tool')}\n"
         f"Tool result (JSON):\n{json.dumps(result, default=str)[:6000]}\n\n"
         "Answer the question from this result."})
-    out = router_.complete(msgs, lane="quality", purpose="synthesize", max_tokens=900)
+    # Tool results can embed contacts rows (lookup_contact, entity_detail) —
+    # behavioral rule 6 bars trainable free tiers from ever seeing them.
+    out = router_.complete(msgs, lane="quality", purpose="synthesize", max_tokens=900,
+                           deny=SENSITIVE_DENY)
     return out["text"], out.get("provider")
 
 
@@ -112,6 +139,9 @@ def agent(q: AgentQuery):
         return {"error": "no_ai_provider_available", "detail": str(e),
                 "hint": "Set at least one of GROQ_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / "
                         "CLOUDFLARE_* / ANTHROPIC_API_KEY / OPENAI_API_KEY."}
+    except PlannerFailed as e:
+        return {"error": "planner_failed", "detail": str(e),
+                "hint": "The planning model returned no usable JSON. Try rephrasing the question."}
 
 
 @router.post("/agent/stream")
@@ -130,8 +160,10 @@ def agent_stream(q: AgentQuery):
             answer, synth_provider = _synthesize(q.question, plan, result, history)
             yield _sse("answer", {"text": answer, "provider": synth_provider})
             yield _sse("done", {})
-        except ProviderError as e:
+        except (ProviderError, PlannerFailed) as e:
             yield _sse("error", {"detail": str(e)})
+        except Exception as e:  # a tool bug must end the stream with an error event, not silence
+            yield _sse("error", {"detail": f"{type(e).__name__}: {e}"})
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 

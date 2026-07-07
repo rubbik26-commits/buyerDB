@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from "react";
-import { api, num } from "../api/client.js";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { api, IS_RPC_MODE, num } from "../api/client.js";
 import { Pill, Loading, Empty, ErrorBanner } from "../components/ui.jsx";
 
 export default function Review({ refreshMeta }) {
@@ -8,16 +8,21 @@ export default function Review({ refreshMeta }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [acting, setActing] = useState(null);
+  const seqRef = useRef(0);
 
   const load = useCallback(() => {
+    const seq = ++seqRef.current; // interleaved reloads must not resurrect a resolved item
     setLoading(true); setErr(null);
     api.review({ status: "open", issue_class: filter, limit: 50 })
-      .then(setData).catch(setErr).finally(() => setLoading(false));
+      .then((d) => { if (seq === seqRef.current) setData(d); })
+      .catch((e) => { if (seq === seqRef.current) setErr(e); })
+      .finally(() => { if (seq === seqRef.current) setLoading(false); });
   }, [filter]);
   useEffect(() => { load(); }, [load]);
 
   async function act(item, action, entity_id) {
     setActing(item.review_id);
+    setErr(null);
     try {
       await api.reviewAct({ review_id: item.review_id, action, entity_id, user_id: "broker" });
       await load();
@@ -78,7 +83,13 @@ export default function Review({ refreshMeta }) {
                       <div className="nm">{c.display_name}</div>
                       <div className="sc">{c.reason} · score {c.score}</div>
                     </div>
-                    <button className="btn brass sm" disabled={acting === it.review_id} onClick={() => act(it, "confirm_merge", c.entity_id)}>This is the match</button>
+                    {IS_RPC_MODE ? (
+                      // entity merges run Python entity-resolution on the
+                      // backend; offering the button in RPC mode dead-ends
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--tx-mute)" }}>merge needs backend</span>
+                    ) : (
+                      <button className="btn brass sm" disabled={acting === it.review_id} onClick={() => act(it, "confirm_merge", c.entity_id)}>This is the match</button>
+                    )}
                   </div>
                 ))}
               </div>

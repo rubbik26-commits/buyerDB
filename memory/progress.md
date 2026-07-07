@@ -1,5 +1,47 @@
 # Progress Log
 
+## 2026-07-07 — FULL-SYSTEM REVIEW + REFACTOR (user directive: read/optimize/improve every file)
+Branch `claude/system-debug-refactor-724uem`. Six parallel reviewers read every file
+(worker, backend, frontend, edge functions, SQL, infra/docs); every verified finding
+fixed, tested, and committed per subsystem. Verified end-to-end on a fresh Postgres 16:
+migrations 001–009 apply clean → CSV load → 13/13 assertions → **27/27 tests** →
+frontend build → all 6 edge functions pass `deno check`.
+
+Highest-impact fixes (full detail in the six commit messages):
+1. **Edge functions failed OPEN on auth** — a missing `app_config` row made
+   `body.secret !== undefined` pass for unauthenticated callers in
+   crexi-ingest/crexi-run/dos-enrich/skyline-sync. Now fail-closed via a shared
+   `_shared/mod.ts` (also unifies 4 divergent address normalizers that forked
+   cross-source dedupe keys, and makes dead-key runs report red, not green).
+2. **`sync_upsert_deals` rubber-stamped the amount gate** and `api_buyers`
+   multiplied deal counts by contact count; `api_review_act` was an anonymous
+   write. All fixed in **migration 009 (staged, NOT yet applied to prod)** —
+   apply it and redeploy the updated edge functions in one window.
+3. **Behavioral rule 6 (no contact data to Gemini) was enforced nowhere** —
+   provider router now has a deny-list; agent synthesis always excludes Gemini.
+4. **`run_readonly_sql` was bypassable** (quoted identifiers dodged the table
+   allowlist; `;` multi-statement never matched) — an LLM-planned query could
+   read `app_config`. Closed + READ ONLY transaction.
+5. Worker: transient Cloudflare 403s permanently blacklisted URLs via the
+   fetch ledger; SoQL apostrophe bug (the documented O'Callahan class) made
+   whole streets unenrichable; zero-price deals crashed phase 2; conflicting
+   ACRIS parties now flag review_queue instead of silently attaching; the test
+   suite used to wipe the production scrape_runs audit trail.
+6. Frontend: "$3,000,000" in a price filter silently disabled the filter
+   (NaN→null); agent history roles 400'd every follow-up once a backend
+   exists; five fetch races fixed.
+7. Infra: keep-alive push lacked `contents: write`; legacy crons now gated on
+   `ENABLE_LEGACY_WORKER` (were guaranteed-red daily); load-database swallowed
+   migration errors; stale zip snapshot deleted; SOP-deploy-links + README
+   rewritten to match D-008/D-010.
+8. Migrations 007/008 were stubs — real SQL exported verbatim from prod so a
+   fresh environment matches production.
+
+**Deploy checklist for the user (prod is untouched by this branch until done):**
+apply `009_hardening.sql` via Supabase MCP/SQL editor, then deploy the six
+edge-function sources (acris-v2 now sends `deed_amount`), then verify one
+skyline-sync run and the Buyers tab counts.
+
 ## 2026-07-06 (night) — BASE44 REMOVAL (user directive: "this system has nothing to do with base44")
 User chose "Cut Base44 out" — scrapers write directly to Supabase. Done so far:
 1. **Contact harvest** (before decommission): pulled all 7,818 Base44 Contact records;

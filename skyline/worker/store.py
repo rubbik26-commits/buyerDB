@@ -17,7 +17,7 @@ import psycopg2
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from shared.normalize import (norm_entity, normalize_address, split_address,
-                              is_placeholder, BANNED_ASSET_TYPES,
+                              is_placeholder, entity_type, BANNED_ASSET_TYPES,
                               ONE_TWO_FAMILY_CLASSES, CONDO_BUILDING_CLASSES)
 
 AMOUNT_TOL = 0.03
@@ -30,11 +30,17 @@ def connect():
 
 # ── fetch ledger ─────────────────────────────────────────────────────────────
 def urls_not_fetched(conn, urls):
-    """Discovery must subtract the ledger BEFORE fetching (README rule)."""
+    """Discovery must subtract the ledger BEFORE fetching (README rule).
+    fetch_error dispositions do NOT count as fetched: a Cloudflare 403 or a
+    timeout is transport-dependent, not permanent (verified: same URL flips
+    403->200) — treating it as done permanently blacklisted the deal."""
     if not urls:
         return []
     with conn.cursor() as cur:
-        cur.execute("SELECT url FROM fetch_ledger WHERE url = ANY(%s)", (list(urls),))
+        cur.execute(
+            """SELECT url FROM fetch_ledger
+               WHERE url = ANY(%s) AND disposition NOT LIKE 'fetch_error:%%'""",
+            (list(urls),))
         done = {r[0] for r in cur.fetchall()}
     return [u for u in urls if u not in done]
 
@@ -111,6 +117,13 @@ def merge_deal(conn, row):
         notes = (notes + " | units<=2 without building-class evidence: possible 1-2 family — review").strip(" |")
 
     with conn.cursor() as cur:
+        # dedupe on acris doc id BEFORE the property upsert: a duplicate must not
+        # touch properties.updated_at or create a property row as a side effect
+        if row.get("acris_doc_id"):
+            cur.execute("SELECT 1 FROM deals WHERE acris_doc_id=%s", (row["acris_doc_id"],))
+            if cur.fetchone():
+                return MergeResult("duplicate", reason="acris_doc_id")
+
         # property upsert
         key = normalize_address(addr)
         num, name = split_address(addr)
@@ -122,11 +135,7 @@ def merge_deal(conn, row):
             (addr, key, num, name, row.get("borough"), row.get("market")))
         pid = cur.fetchone()[0]
 
-        # dedupe: acris doc id, then addr+price+date (the phase3 keys, now constraints)
-        if row.get("acris_doc_id"):
-            cur.execute("SELECT 1 FROM deals WHERE acris_doc_id=%s", (row["acris_doc_id"],))
-            if cur.fetchone():
-                return MergeResult("duplicate", reason="acris_doc_id")
+        # dedupe: addr+price+date (the phase3 keys, now constraints)
         cur.execute(
             """SELECT 1 FROM deals WHERE property_id=%s
                AND sale_price IS NOT DISTINCT FROM %s AND sale_date IS NOT DISTINCT FROM %s""",
@@ -159,8 +168,11 @@ def amount_gate(sale_price, sale_date, deed_amount, deed_date):
         return amt > 0 and abs(amt - float(sale_price)) / float(sale_price) <= AMOUNT_TOL
     if not deed_date or not sale_date:
         return False
-    dd = datetime.date.fromisoformat(str(deed_date)[:10])
-    sd = datetime.date.fromisoformat(str(sale_date)[:10])
+    try:
+        dd = datetime.date.fromisoformat(str(deed_date)[:10])
+        sd = datetime.date.fromisoformat(str(sale_date)[:10])
+    except ValueError:
+        return False  # unparseable date is missing evidence: gate out, don't crash
     return abs((sd - dd).days) <= NO_PRICE_DATE_WINDOW_DAYS
 
 
@@ -173,8 +185,7 @@ def get_or_create_entity(conn, display_name):
             """INSERT INTO entities (display_name, norm_name, entity_type)
                VALUES (%s,%s,%s) ON CONFLICT (norm_name) DO UPDATE SET norm_name=EXCLUDED.norm_name
                RETURNING entity_id""",
-            (str(display_name).strip(), nn,
-             "llc" if "LLC" in nn else ("corp" if "INC" in nn or "CORP" in nn else "unknown")))
+            (str(display_name).strip(), nn, entity_type(nn)))
         return cur.fetchone()[0]
 
 
@@ -199,6 +210,20 @@ def apply_acris_party_fill(conn, deal_id, doc_id, deed_amount, deed_date,
             eid = get_or_create_entity(conn, name)
             if not eid:
                 continue
+            # A DIFFERENT entity already holding this role is a conflict:
+            # invariant 3 says flag it, never auto-resolve (a correction deed or
+            # a second matched deed must not quietly add a second buyer).
+            cur.execute(
+                """SELECT entity_id FROM deal_parties
+                   WHERE deal_id=%s AND role=%s AND entity_id <> %s LIMIT 1""",
+                (deal_id, role, eid))
+            existing = cur.fetchone()
+            if existing:
+                flag_review(conn, "deal", deal_id, "party_conflict", {
+                    "role": role, "existing_entity_id": str(existing[0]),
+                    "incoming_name": str(name), "acris_doc_id": doc_id,
+                    "deed_amount": float(deed_amount or 0)})
+                continue
             cur.execute(
                 """INSERT INTO deal_parties (deal_id, entity_id, role, mailing_address, source_system,
                                              provenance_ref, amount_gate_passed, verified_deed_amount)
@@ -212,9 +237,11 @@ def apply_acris_party_fill(conn, deal_id, doc_id, deed_amount, deed_date,
             if cur.rowcount:
                 filled.append("sale_price")
         if filled:
+            note = f" | parties from ACRIS {doc_id} (amount-gated)"
             cur.execute(
-                "UPDATE deals SET notes = trim(both ' |' from coalesce(notes,'') || %s), updated_at=now() WHERE deal_id=%s",
-                (f" | parties from ACRIS {doc_id} (amount-gated)", deal_id))
+                """UPDATE deals SET notes = trim(both ' |' from coalesce(notes,'') || %s), updated_at=now()
+                   WHERE deal_id=%s AND (notes IS NULL OR position(%s in notes) = 0)""",
+                (note, deal_id, note.strip(" |")))
     return {"status": "filled" if filled else "nothing_to_fill", "filled": filled}
 
 
@@ -233,6 +260,12 @@ def rolling_not_done(conn, deal_ids):
 def mark_rolling_done(conn, deal_id):
     with conn.cursor() as cur:
         cur.execute("INSERT INTO rolling_ledger (deal_id) VALUES (%s) ON CONFLICT DO NOTHING", (deal_id,))
+
+
+def unmark_rolling(conn, deal_id):
+    """Release a ledger slot after a transient fetch error so the deal retries."""
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM rolling_ledger WHERE deal_id=%s", (deal_id,))
 
 
 # ── review flag (conflicts get queued, never silently resolved) ──────────────

@@ -25,6 +25,9 @@ def _insert_deal(cur, tag, price):
 @pytest.fixture()
 def tag():
     t = "e2" + uuid.uuid4().hex[:8]
+    conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
+    cur.execute("SELECT now()"); t0 = cur.fetchone()[0]
+    conn.close()
     yield t
     conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
     cur.execute("""DELETE FROM deal_parties WHERE deal_id IN
@@ -34,7 +37,8 @@ def tag():
                    (SELECT property_id FROM properties WHERE address_raw ILIKE %s)""", (f"%{t}%",))
     cur.execute("DELETE FROM properties WHERE address_raw ILIKE %s", (f"%{t}%",))
     cur.execute("DELETE FROM entities WHERE norm_name ILIKE %s", (f"%{t.upper()}%",))
-    cur.execute("DELETE FROM scrape_runs WHERE job='phase2-enrichment'")
+    # only this test's runs — never the shared DB's cron-run audit trail
+    cur.execute("DELETE FROM scrape_runs WHERE job='phase2-enrichment' AND started_at >= %s", (t0,))
     conn.commit(); conn.close()
 
 

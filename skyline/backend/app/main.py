@@ -9,7 +9,8 @@ from .routes import deals, agent, uploads, review
 
 app = FastAPI(title="Skyline Deal Intelligence API", version="1.0")
 
-origins = [o.strip() for o in os.environ.get("FRONTEND_URL", "http://localhost:5173").split(",") if o.strip()]
+origins = [o.strip() for o in os.environ.get("FRONTEND_URL", "http://localhost:5173").split(",")
+           if o.strip() and o.strip() != "*"]  # '*' + allow_credentials would reflect any origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins + ["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -25,7 +26,6 @@ app.include_router(review.router)
 @app.get("/api/health")
 def health():
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1")
         cur.execute("SELECT count(*) FROM deals")
         n = cur.fetchone()[0]
     return {"status": "ok", "deals": n}
