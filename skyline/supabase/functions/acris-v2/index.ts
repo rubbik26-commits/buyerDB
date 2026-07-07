@@ -161,7 +161,7 @@ async function run(sinceISO: string, untilISO: string | null) {
       address, address_norm: normalized, bbl,
       borough: boroughName, market: boroughName ? boroughName.toLowerCase() : null,
       asset_type: assetType,
-      sale_price: salePrice, units, sqft: squareFeet,
+      sale_price: salePrice, deed_amount: salePrice, units, sqft: squareFeet,
       sale_date: saleDate, post_date: master.recorded_datetime ? String(master.recorded_datetime).slice(0, 10) : null,
       source_system: "acris", source_url: acrisSourceUrl(doc),
       confidence: Math.min(100, confidence),
