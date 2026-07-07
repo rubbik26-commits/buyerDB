@@ -70,7 +70,7 @@ def list_deals(q: Optional[str] = None, borough: Optional[str] = None,
             SELECT d.deal_id, d.sale_date, p.address_raw AS address, p.borough, p.market,
                    d.asset_type, b.display_name AS buyer, s.display_name AS seller,
                    d.sale_price, d.units, d.sqft, d.ppu, d.ppsf, d.confidence,
-                   d.parse_status, d.source_url, d.source_system
+                   d.parse_status, d.source_url, d.source_system, d.notes
             {BASE} WHERE {where}
             ORDER BY {sort_col} {direction} NULLS LAST, d.deal_id
             LIMIT %s OFFSET %s""", params + [per_page, (page - 1) * per_page])

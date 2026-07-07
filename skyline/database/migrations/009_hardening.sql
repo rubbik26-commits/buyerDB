@@ -32,6 +32,100 @@
 --      on the two columns api_deals actually ILIKE-searches.
 
 -- ---------------------------------------------------------------------------
+-- A0) api_deals — expose the notes provenance string (invariant 7), so the
+-- Deals detail panel matches the FastAPI transport. Full body re-declared
+-- because CREATE OR REPLACE cannot patch a single field.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION api_deals(
+  q text DEFAULT NULL, borough text DEFAULT NULL, asset_type text DEFAULT NULL,
+  market text DEFAULT NULL, price_min numeric DEFAULT NULL, price_max numeric DEFAULT NULL,
+  date_min date DEFAULT NULL, date_max date DEFAULT NULL,
+  units_min int DEFAULT NULL, units_max int DEFAULT NULL,
+  sqft_min int DEFAULT NULL, sqft_max int DEFAULT NULL,
+  ppsf_max numeric DEFAULT NULL, confidence_min int DEFAULT NULL,
+  status text DEFAULT NULL, has_buyer boolean DEFAULT false,
+  sort_by text DEFAULT 'sale_date', order_dir text DEFAULT 'desc',
+  page int DEFAULT 1, per_page int DEFAULT 50)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH f AS (
+    SELECT d.deal_id, d.sale_date, p.address_raw AS address, p.borough AS boro,
+           p.market AS mkt, d.asset_type AS atype, b.display_name AS buyer,
+           s.display_name AS seller, d.sale_price, d.units, d.sqft, d.ppu, d.ppsf,
+           d.confidence, d.parse_status, d.source_url, d.source_system, d.notes,
+           CASE api_deals.sort_by
+             WHEN 'sale_date'  THEN extract(epoch FROM d.sale_date)
+             WHEN 'sale_price' THEN d.sale_price
+             WHEN 'units'      THEN d.units
+             WHEN 'sqft'       THEN d.sqft
+             WHEN 'ppsf'       THEN d.ppsf
+             WHEN 'ppu'        THEN d.ppu
+             WHEN 'confidence' THEN d.confidence
+             WHEN 'address'    THEN NULL
+             ELSE extract(epoch FROM d.sale_date) END AS sort_num,
+           CASE WHEN api_deals.sort_by = 'address' THEN p.address_raw END AS sort_text
+    FROM deals d
+    JOIN properties p USING (property_id)
+    LEFT JOIN LATERAL (
+      SELECT e.display_name FROM deal_parties dp JOIN entities e USING (entity_id)
+      WHERE dp.deal_id = d.deal_id AND dp.role = 'buyer' ORDER BY dp.entity_id LIMIT 1) b ON true
+    LEFT JOIN LATERAL (
+      SELECT e.display_name FROM deal_parties dp JOIN entities e USING (entity_id)
+      WHERE dp.deal_id = d.deal_id AND dp.role = 'seller' ORDER BY dp.entity_id LIMIT 1) s ON true
+    WHERE (api_deals.q IS NULL OR api_deals.q = ''
+           OR p.address_raw ILIKE '%' || api_deals.q || '%'
+           OR b.display_name ILIKE '%' || api_deals.q || '%'
+           OR s.display_name ILIKE '%' || api_deals.q || '%')
+      AND (api_deals.borough IS NULL OR api_deals.borough = '' OR p.borough = api_deals.borough)
+      AND (api_deals.asset_type IS NULL OR api_deals.asset_type = '' OR d.asset_type = api_deals.asset_type)
+      AND (api_deals.market IS NULL OR api_deals.market = '' OR p.market = api_deals.market)
+      AND (api_deals.price_min IS NULL OR d.sale_price >= api_deals.price_min)
+      AND (api_deals.price_max IS NULL OR d.sale_price <= api_deals.price_max)
+      AND (api_deals.date_min IS NULL OR d.sale_date >= api_deals.date_min)
+      AND (api_deals.date_max IS NULL OR d.sale_date <= api_deals.date_max)
+      AND (api_deals.units_min IS NULL OR d.units >= api_deals.units_min)
+      AND (api_deals.units_max IS NULL OR d.units <= api_deals.units_max)
+      AND (api_deals.sqft_min IS NULL OR d.sqft >= api_deals.sqft_min)
+      AND (api_deals.sqft_max IS NULL OR d.sqft <= api_deals.sqft_max)
+      AND (api_deals.ppsf_max IS NULL OR d.ppsf <= api_deals.ppsf_max)
+      AND (api_deals.confidence_min IS NULL OR d.confidence >= api_deals.confidence_min)
+      AND (api_deals.status IS NULL OR api_deals.status = '' OR d.parse_status = api_deals.status)
+      AND (NOT api_deals.has_buyer OR b.display_name IS NOT NULL)
+  ),
+  pg AS (
+    SELECT *, row_number() OVER (
+      ORDER BY
+        CASE WHEN api_deals.order_dir = 'asc'  THEN sort_num  END ASC  NULLS LAST,
+        CASE WHEN api_deals.order_dir <> 'asc' THEN sort_num  END DESC NULLS LAST,
+        CASE WHEN api_deals.order_dir = 'asc'  THEN sort_text END ASC  NULLS LAST,
+        CASE WHEN api_deals.order_dir <> 'asc' THEN sort_text END DESC NULLS LAST,
+        deal_id
+    ) AS rn
+    FROM f
+    ORDER BY rn
+    LIMIT least(greatest(api_deals.per_page, 1), 200)
+    OFFSET (greatest(api_deals.page, 1) - 1) * least(greatest(api_deals.per_page, 1), 200)
+  )
+  SELECT jsonb_build_object(
+    'total', (SELECT count(*) FROM f),
+    'page', greatest(api_deals.page, 1),
+    'per_page', least(greatest(api_deals.per_page, 1), 200),
+    'pulse', (SELECT jsonb_build_object('n', count(*), 'vol', coalesce(sum(sale_price), 0),
+                'median', percentile_cont(0.5) WITHIN GROUP (ORDER BY sale_price))
+              FROM f WHERE sale_price IS NOT NULL),
+    'deals', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                'deal_id', deal_id, 'sale_date', sale_date, 'address', address,
+                'borough', boro, 'market', mkt, 'asset_type', atype,
+                'buyer', buyer, 'seller', seller, 'sale_price', sale_price,
+                'units', units, 'sqft', sqft, 'ppu', ppu, 'ppsf', ppsf,
+                'confidence', confidence, 'parse_status', parse_status,
+                'source_url', source_url, 'source_system', source_system, 'notes', notes)
+              ORDER BY rn), '[]'::jsonb) FROM pg));
+$$;
+-- Same signature as migration 004, so the existing GRANT ... TO anon still
+-- applies; re-granting here is harmless and explicit.
+GRANT EXECUTE ON FUNCTION api_deals(text,text,text,text,numeric,numeric,date,date,int,int,int,int,numeric,int,text,boolean,text,text,int,int) TO anon;
+
+-- ---------------------------------------------------------------------------
 -- A) api_buyers — contacts fan-out fix
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION api_buyers(
