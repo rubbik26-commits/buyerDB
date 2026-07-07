@@ -34,7 +34,12 @@ def _live_fetch(url):
 
 
 def _row_to_candidate(row):
-    """Adapt a traded_backfill parsed row (its column names) to store.merge_deal's keys."""
+    """Adapt a traded_backfill parsed row (its column names) to store.merge_deal's keys.
+    NOTE: Buyer/Seller from the parsed page are intentionally NOT written here —
+    merge_deal has no party write path, and this GitHub-Actions worker is the
+    LEGACY fallback (decisions D-008/D-010). The live pg_cron -> edge-function
+    path ingests traded parties through sync_upsert_deals(); parties for
+    legacy-merged deals arrive via the amount-gated phase-2 ACRIS fill."""
     if not row:
         return None
     return {
@@ -85,8 +90,8 @@ def run(discover_fn=None, fetch_fn=None, limit=None):
             res = store.merge_deal(conn, cand)
             store.record_fetch(conn, url, res.status)
             conn.commit()
-            key = res.status if res.status in stats else "merged"
-            stats[key] = stats.get(key, 0) + 1
+            key = res.status if res.status in stats else "other"
+            stats[key] = stats.get(key, 0) + 1  # unknown status must not inflate "merged"
 
         store.finish_run(conn, run_id, "success", stats)
         conn.commit()

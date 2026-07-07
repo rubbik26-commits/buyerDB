@@ -17,6 +17,9 @@ def clean_urls():
     shared DB is left as found (this test commits, unlike the rollback-based store tests)."""
     tag = uuid.uuid4().hex[:8]
     created = {"urls": [], "addr": f"12345 Acceptance Way {tag}"}
+    conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
+    cur.execute("SELECT now()"); t0 = cur.fetchone()[0]
+    conn.close()
     yield tag, created
     conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
     cur.execute("DELETE FROM fetch_ledger WHERE url = ANY(%s)", (created["urls"],))
@@ -24,7 +27,9 @@ def clean_urls():
                    (SELECT property_id FROM properties WHERE address_raw LIKE %s)""", (f"%{tag}%",))
     cur.execute("DELETE FROM properties WHERE address_raw LIKE %s", (f"%{tag}%",))
     cur.execute("DELETE FROM exclusion_ledger WHERE addr_norm LIKE %s", (f"%{tag.lower()}%",))
-    cur.execute("DELETE FROM scrape_runs WHERE job='daily-incremental'")
+    # delete ONLY this test's runs — the shared DB's cron-run audit trail (which
+    # SOP-daily-refresh relies on) must survive a test-suite invocation
+    cur.execute("DELETE FROM scrape_runs WHERE job='daily-incremental' AND started_at >= %s", (t0,))
     conn.commit(); conn.close()
 
 

@@ -39,7 +39,14 @@ def fetch_candidates(num, tok, boro_code):
 
 
 def consistent(values):
-    vals = {int(float(v)) for v in values if v and float(v) > 0}
+    vals = set()
+    for v in values:
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            continue  # Rolling Sales emits junk like "-" / "N/A "; skip, don't abort the run
+        if n > 0:
+            vals.add(int(n))
     return vals.pop() if len(vals) == 1 else None
 
 
@@ -69,7 +76,7 @@ def run(conn=None, fetch_fn=None, batch=400, sleep=True, only_deal_ids=None):
     run_id = store.start_run(conn, "rolling-sales")
     conn.commit()
     stats = {"targets": 0, "sqft_filled": 0, "units_filled": 0,
-             "conflict_flagged": 0, "ambiguous": 0, "nohit": 0}
+             "conflict_flagged": 0, "ambiguous": 0, "nohit": 0, "fetch_errors": 0}
     try:
         targets = find_targets(conn, batch, only_deal_ids=only_deal_ids)
         stats["targets"] = len(targets)
@@ -85,7 +92,8 @@ def run(conn=None, fetch_fn=None, batch=400, sleep=True, only_deal_ids=None):
                 cands = fetch_fn(num, max(toks, key=len), BOROUGH_CODE[t["borough"]])
             except Exception:
                 # transient fetch error: don't consume the ledger slot
-                store_unmark(conn, t["deal_id"])
+                store.unmark_rolling(conn, t["deal_id"])
+                stats["fetch_errors"] += 1
                 conn.commit()
                 continue
             cands = [c for c in cands
@@ -117,11 +125,6 @@ def run(conn=None, fetch_fn=None, batch=400, sleep=True, only_deal_ids=None):
             conn.close()
 
 
-def store_unmark(conn, deal_id):
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM rolling_ledger WHERE deal_id=%s", (deal_id,))
-
-
 def _apply_fill(conn, t, sf, un, stats):
     """Fill-only; >20% disagreement with an existing value is flagged, never overwritten.
     deals.ppu/ppsf are generated, so they recompute automatically when units/sqft change."""
@@ -146,6 +149,15 @@ def _apply_fill(conn, t, sf, un, stats):
             if cur.rowcount:
                 stats["units_filled"] += 1
                 notes.append(f"units {un}")
+        elif t["units"] is not None and un and abs(un - t["units"]) / max(un, t["units"]) > 0.20:
+            # the module contract promises the >20%-disagreement flag for BOTH
+            # fields; only sqft had the branch
+            cur.execute("UPDATE deals SET parse_status='needs_review', updated_at=now() WHERE deal_id=%s",
+                        (t["deal_id"],))
+            store.flag_review(conn, "deal", t["deal_id"], "units_conflict",
+                              {"address": t["address_raw"], "existing_units": t["units"], "rolling_units": un})
+            stats["conflict_flagged"] += 1
+            notes.append(f"units conflict: has {t['units']} vs RollingSales {un}")
         if notes:
             cur.execute(
                 "UPDATE deals SET notes = trim(both ' |' from coalesce(notes,'') || %s), updated_at=now() WHERE deal_id=%s",

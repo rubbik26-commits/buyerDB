@@ -19,7 +19,7 @@ port is testable against Postgres with deterministic data, exactly like
 run_incremental. Defaults call the live ACRIS/PLUTO functions in acris_enrich.
 """
 import os, sys, traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -37,7 +37,7 @@ MASTER_CAP = 4000             # preserved
 
 # ── live fetchers (unchanged ACRIS queries) ──────────────────────────────────
 def fetch_masters_live(recent_days=RECENT_DAYS):
-    since = (datetime.utcnow() - timedelta(days=recent_days)).strftime("%Y-%m-%d")
+    since = (datetime.now(timezone.utc) - timedelta(days=recent_days)).strftime("%Y-%m-%d")
     where = (f"doc_type IN {DEED_TYPES} AND document_amt >= {PRICE_FLOOR} "
              f"AND recorded_datetime >= '{since}T00:00:00.000'")
     return soql_all(MASTER, where, "recorded_datetime DESC", page=1000, cap=MASTER_CAP)
@@ -59,27 +59,29 @@ def fetch_pluto_live(legals):
 
 # ── candidate construction (domain logic preserved verbatim) ─────────────────
 def build_candidate(m, parties, legals, pluto):
-    """Returns (merge_row, party_info) or None — same accept/reject rules and
-    confidence scoring as the original build stage."""
+    """Returns (merge_row, party_info) or (None, reason) — same accept/reject
+    rules and confidence scoring as the original build stage. The reason keeps
+    run stats honest: missing legals / bad address / sub-floor price used to be
+    lumped into rejected_class."""
     doc = m["document_id"]
     lg = legals.get(doc)
     if not lg:
-        return None
+        return None, "no_legals"
     num = (lg.get("street_number") or "").strip()
     name = (lg.get("street_name") or "").strip()
     if not num or not name:
-        return None
+        return None, "bad_address"
     if not re.match(r"^\d", num):           # isBadAddress rule from the Deno ingester
-        return None
+        return None, "bad_address"
     price = float(m.get("document_amt") or 0)
     if price < PRICE_FLOOR:
-        return None
+        return None, "below_floor"
     bbl = build_bbl(lg.get("borough"), lg.get("block"), lg.get("lot"))
     pl = pluto.get(str(int(bbl))) if bbl else None
     units = int(pl["unitstotal"]) if pl and pl.get("unitstotal") else None
     asset = classify(pl.get("bldgclass") if pl else None, lg.get("property_type"), units)
     if not asset:                            # residential/condo classes rejected here
-        return None
+        return None, "rejected_class"
     boro = CODE_BOROUGH.get(str(lg.get("borough") or "").strip())
     addr = " ".join(x for x in [num, name.title(), boro, "NY"] if x)
     pt = parties.get(doc, {})
@@ -106,7 +108,7 @@ def build_candidate(m, parties, legals, pluto):
     party_info = {"doc": doc, "amount": price, "date": sale_date,
                   "buyer": buyer, "seller": seller,
                   "buyer_address": pt.get("buyer_address"), "seller_address": pt.get("seller_address")}
-    return merge_row, party_info
+    return (merge_row, party_info), None
 
 
 def run(conn=None, fetch_masters_fn=None, fetch_detail_fn=None, fetch_pluto_fn=None,
@@ -120,7 +122,8 @@ def run(conn=None, fetch_masters_fn=None, fetch_detail_fn=None, fetch_pluto_fn=N
     conn.commit()
     stats = {"masters": 0, "candidates": 0, "merged": 0, "parties_filled": 0,
              "duplicate": 0, "rejected_class": 0, "rejected_excluded": 0,
-             "rejected_one_two_family": 0, "rejected_condo_class": 0, "gated_out": 0}
+             "rejected_one_two_family": 0, "rejected_condo_class": 0, "gated_out": 0,
+             "no_legals": 0, "bad_address": 0, "below_floor": 0, "other": 0}
     try:
         masters = list(fetch_masters_fn())
         if limit:
@@ -131,9 +134,9 @@ def run(conn=None, fetch_masters_fn=None, fetch_detail_fn=None, fetch_pluto_fn=N
         pluto = fetch_pluto_fn(legals)
 
         for m in masters:
-            built = build_candidate(m, parties, legals, pluto)
+            built, reject_reason = build_candidate(m, parties, legals, pluto)
             if not built:
-                stats["rejected_class"] += 1
+                stats[reject_reason] = stats.get(reject_reason, 0) + 1
                 continue
             merge_row, pinfo = built
             stats["candidates"] += 1
@@ -149,8 +152,8 @@ def run(conn=None, fetch_masters_fn=None, fetch_detail_fn=None, fetch_pluto_fn=N
                 elif fill.get("status") == "gated_out":
                     stats["gated_out"] += 1
             else:
-                key = res.status if res.status in stats else "duplicate"
-                stats[key] = stats.get(key, 0) + 1
+                key = res.status if res.status in stats else "other"
+                stats[key] = stats.get(key, 0) + 1  # unknown status must not masquerade as duplicate
             conn.commit()
 
         store.finish_run(conn, run_id, "success", stats)

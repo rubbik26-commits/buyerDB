@@ -393,7 +393,11 @@ def discover_sitemap_deal_urls(session: requests.Session) -> List[tuple]:
 
 
 def discover_deal_urls(session: requests.Session, include_sitemap: bool = True) -> List[str]:
-    seen: set[str] = set()
+    # Insertion-ordered dict, NOT sorted(): listing pages surface the newest
+    # deals first and the sitemap arrives newest-first by lastmod. Alphabetical
+    # ordering made a limited run (INCREMENTAL_LIMIT) re-take the
+    # alphabetically-first URLs every day and starve the newest deals.
+    seen: dict[str, None] = {}
     discovery_pages = ([TRADED_NY_INDEX] + TRADED_BOROUGH_INDEXES
                        + TRADED_ASSET_SALE_INDEXES + [TRADED_ALL_DEALS_INDEX])
 
@@ -408,22 +412,23 @@ def discover_deal_urls(session: requests.Session, include_sitemap: bool = True) 
             href = urljoin(TRADED_BASE, tag["href"])
             if _DEAL_URL_RE.match(href):
                 clean = href.rstrip("/") + "/"
-                seen.add(clean)
+                seen.setdefault(clean)
 
         for raw_url in _DEAL_URL_RE.findall(resp.text):
-            seen.add(raw_url.rstrip("/") + "/")
+            seen.setdefault(raw_url.rstrip("/") + "/")
 
         # __NEXT_DATA__ initialDeals[].url / node.link extraction (additive)
-        seen |= _extract_next_data_deal_urls(resp.text)
+        for u in _extract_next_data_deal_urls(resp.text):
+            seen.setdefault(u)
 
         time.sleep(REQUEST_DELAY + random.uniform(0, 1))
 
     if include_sitemap:
         for u, _lastmod in discover_sitemap_deal_urls(session):
-            seen.add(u)
+            seen.setdefault(u)
 
     log.info("Discovered %d unique traded.co deal URLs", len(seen))
-    return sorted(seen)
+    return list(seen)
 
 
 def _extract_text_block(soup: BeautifulSoup) -> str:

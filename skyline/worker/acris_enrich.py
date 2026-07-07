@@ -14,10 +14,18 @@ Phase 3: fresh-deal ingest for the recent window (last 120 days), with the
          ACRIS CC/CP) are EXCLUDED here, and C/D-class with <=4 units rejected
          as in the original.
 """
-import re, json, time, sys
+import re, json, time, sys, os
 import pandas as pd
 import requests
 from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+# shared/normalize.py is THE single implementation of these (its docstring says
+# so); this module used to carry verbatim copies, which is the documented
+# "one implementation" error class. Re-exported here because phase2/phase3/
+# rolling/backfill import them from this module.
+from shared.normalize import (PLACEHOLDER, is_placeholder, norm_entity,  # noqa: F401
+                              DIR, SUF, canon_street, split_address)
 
 ACRIS_BASE = "https://data.cityofnewyork.us/resource"
 MASTER, LEGALS, PARTIES = "bnx9-e6tj", "8h5j-fqxa", "636b-3b5g"
@@ -27,50 +35,6 @@ DEED_TYPES = "('DEED','DEEDO','DEEDP')"
 
 BOROUGH_CODE = {"Manhattan": "1", "Bronx": "2", "Brooklyn": "3", "Queens": "4", "Staten Island": "5"}
 CODE_BOROUGH = {v: k for k, v in BOROUGH_CODE.items()}
-
-PLACEHOLDER = re.compile(
-    r"^(unknown|n/?a|not\s+specified|not\s+provided|not\s+disclosed|not\s+found|undisclosed|"
-    r"confidential|withheld|anonymous|private\s+investor|various|multiple|null|undefined|none|"
-    r"no\s+name|tbd|tba|-+|\*+)$", re.IGNORECASE)
-
-def is_placeholder(v):
-    if v is None or not isinstance(v, str) or not v.strip():
-        return True
-    return bool(PLACEHOLDER.match(v.strip()))
-
-def norm_entity(name):
-    if not name or is_placeholder(name):
-        return None
-    n = str(name).strip().upper()
-    n = re.sub(r"L\.L\.C\.|LLC", "LLC", n)
-    n = re.sub(r"INC\.|INCORPORATED|INC", "INC", n)
-    return re.sub(r"\s+", " ", n).strip() or None
-
-DIR = {"EAST": "E", "WEST": "W", "NORTH": "N", "SOUTH": "S"}
-SUF = {"STREET": "ST", "ST": "ST", "AVENUE": "AVE", "AVE": "AVE", "AV": "AVE",
-       "BOULEVARD": "BLVD", "BLVD": "BLVD", "ROAD": "RD", "RD": "RD", "DRIVE": "DR", "DR": "DR",
-       "LANE": "LN", "LN": "LN", "PLACE": "PL", "PL": "PL", "PARKWAY": "PKWY", "PKWY": "PKWY",
-       "SQUARE": "SQ", "COURT": "CT", "CT": "CT", "TERRACE": "TER", "TER": "TER",
-       "PLAZA": "PLZ", "HIGHWAY": "HWY", "EXPRESSWAY": "EXPY", "BROADWAY": "BWAY"}
-
-def canon_street(name):
-    """Canonical street-name form shared by our addresses and ACRIS legals."""
-    s = str(name or "").upper()
-    s = re.sub(r"[.,#]", " ", s)
-    s = re.sub(r"(\d+)(ST|ND|RD|TH)\b", r"\1", s)          # 193RD -> 193
-    toks = [DIR.get(t, SUF.get(t, t)) for t in s.split()]
-    return " ".join(t for t in toks if t)
-
-def split_address(addr):
-    """'89-03 57th Avenue' -> ('89-03', '57 AVE'); returns (None, None) if no leading number."""
-    m = re.match(r"^\s*(\d+[\-/]?\d*)\s+(.+)$", str(addr or ""))
-    if not m:
-        return None, None
-    num = m.group(1).lstrip("0") or m.group(1)
-    tail = re.sub(r",.*$", "", m.group(2))                  # drop ', Manhattan NY' tails
-    tail = re.sub(r"\b(NEW YORK|NY|NYC|MANHATTAN|BROOKLYN|QUEENS|BRONX|STATEN ISLAND)\b.*$", "",
-                  tail, flags=re.IGNORECASE)
-    return num, canon_street(tail)
 
 def soql(endpoint, params, retries=4):
     for attempt in range(retries):
@@ -109,7 +73,9 @@ def fetch_parties(doc_ids):
     parties = {}
     for chunk in chunked(sorted(doc_ids), 150):
         ids = ",".join(f"'{d}'" for d in chunk)
-        rows = soql_all(PARTIES, f"document_id IN ({ids})", "document_id ASC")
+        # party_type/name in the ORDER keeps "first party of each type"
+        # deterministic across runs when a deed lists several buyers
+        rows = soql_all(PARTIES, f"document_id IN ({ids})", "document_id ASC, party_type ASC, name ASC")
         for r in rows:
             d = parties.setdefault(r["document_id"], {})
             addr = ", ".join(x for x in [r.get("address_1"), r.get("address_2"),

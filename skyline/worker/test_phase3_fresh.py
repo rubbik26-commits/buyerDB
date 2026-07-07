@@ -12,6 +12,9 @@ from worker import phase3_fresh, store
 @pytest.fixture()
 def tag():
     t = "p3" + uuid.uuid4().hex[:8]
+    conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
+    cur.execute("SELECT now()"); t0 = cur.fetchone()[0]
+    conn.close()
     yield t
     conn = psycopg2.connect(os.environ["DATABASE_URL"]); cur = conn.cursor()
     cur.execute("""DELETE FROM deal_parties WHERE deal_id IN
@@ -21,7 +24,8 @@ def tag():
                    (SELECT property_id FROM properties WHERE address_raw ILIKE %s)""", (f"%{t}%",))
     cur.execute("DELETE FROM properties WHERE address_raw ILIKE %s", (f"%{t}%",))
     cur.execute("DELETE FROM entities WHERE norm_name ILIKE %s", (f"%{t.upper()}%",))
-    cur.execute("DELETE FROM scrape_runs WHERE job='phase3-fresh'")
+    # only this test's runs — never the shared DB's cron-run audit trail
+    cur.execute("DELETE FROM scrape_runs WHERE job='phase3-fresh' AND started_at >= %s", (t0,))
     conn.commit(); conn.close()
 
 
@@ -41,7 +45,6 @@ def test_phase3_ingests_gates_and_dedupes(tag):
         docB: {"street_number": "200", "street_name": f"{tag} LANE", "borough": "1",
                "block": "00124", "lot": "0046", "property_type": "A1"},
     }
-    bblA = store.__dict__  # noqa (not used; bbl computed inside)
     from acris_enrich import build_bbl
     plutoA = build_bbl("1", "00123", "0045")
     plutoB = build_bbl("1", "00124", "0046")

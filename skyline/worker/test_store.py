@@ -129,6 +129,24 @@ def test_never_overwrite_existing_party(conn):
         assert cur.fetchone()[0] == 1
 
 
+def test_conflicting_party_is_flagged_not_added(conn):
+    """Invariant 3: a DIFFERENT gated entity for an already-filled role must land
+    in review_queue, never as a silent second buyer."""
+    res = store.merge_deal(conn, _row(sale_price=2_000_000))
+    store.apply_acris_party_fill(conn, res.deal_id, "TESTDOC5", 2_000_000, "2026-06-01",
+                                 buyer="FIRST BUYER LLC")
+    out = store.apply_acris_party_fill(conn, res.deal_id, "TESTDOC6", 2_000_000, "2026-06-01",
+                                       buyer="SECOND BUYER LLC")
+    assert out["status"] == "nothing_to_fill"
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM deal_parties WHERE deal_id=%s AND role='buyer'", (res.deal_id,))
+        assert cur.fetchone()[0] == 1                       # still exactly one buyer
+        cur.execute("""SELECT payload->>'incoming_name' FROM review_queue
+                       WHERE object_id=%s::text AND issue_class='party_conflict'""", (str(res.deal_id),))
+        flagged = cur.fetchone()
+        assert flagged and flagged[0] == "SECOND BUYER LLC"
+
+
 def test_db_check_blocks_ungated_acris_party(conn):
     """Belt AND suspenders: even raw SQL cannot insert an ungated acris party."""
     res = store.merge_deal(conn, _row())
