@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, money, num, shortDate } from "../api/client.js";
-import { Pill, Loading, Empty, ErrorBanner, EntityDrawer } from "../components/ui.jsx";
+import { Pill, Loading, Empty, ErrorBanner } from "../components/ui.jsx";
 
 const COLS = [
   { key: "sale_date", label: "Date", num: false },
@@ -28,15 +28,18 @@ export default function Deals({ meta }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [open, setOpen] = useState(null);
-  const [drawer, setDrawer] = useState(null);
+  const seqRef = useRef(0);
 
   const load = useCallback(() => {
+    // sequence guard: a slow page-2 response landing after a fast sort-change
+    // response would otherwise overwrite the newer table with stale rows
+    const seq = ++seqRef.current;
     setLoading(true);
     setErr(null);
     api.deals({ ...applied, has_buyer: applied.has_buyer ? "true" : "", sort, order, page, per_page: 25 })
-      .then((d) => setData(d))
-      .catch(setErr)
-      .finally(() => setLoading(false));
+      .then((d) => { if (seq === seqRef.current) setData(d); })
+      .catch((e) => { if (seq === seqRef.current) setErr(e); })
+      .finally(() => { if (seq === seqRef.current) setLoading(false); });
   }, [applied, sort, order, page]);
 
   useEffect(() => { load(); }, [load]);
@@ -115,7 +118,7 @@ export default function Deals({ meta }) {
       {loading && !data ? <Loading label="Querying ledger…" /> : null}
 
       {data && (
-        <>
+        <div style={{ opacity: loading ? 0.55 : 1, transition: "opacity 120ms" }}>
           {data.pulse && data.total > 0 && (
             <div style={{ display: "flex", gap: 22, marginBottom: 12, fontFamily: "var(--mono)", fontSize: 12.5, color: "var(--tx-dim)" }}>
               <span><strong style={{ color: "var(--tx)" }}>{num(data.total)}</strong> matching</span>
@@ -171,7 +174,8 @@ export default function Deals({ meta }) {
                               <div className="kv">
                                 <div className="k">Actions</div>
                                 <div className="v" style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                                  {d.source_url && <a className="btn ghost sm" href={d.source_url} target="_blank" rel="noreferrer">Open source</a>}
+                                  {d.source_url && /^https?:\/\//i.test(d.source_url) &&
+                                    <a className="btn ghost sm" href={d.source_url} target="_blank" rel="noreferrer">Open source</a>}
                                 </div>
                               </div>
                             </div>
@@ -192,10 +196,8 @@ export default function Deals({ meta }) {
               <button className="btn ghost sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next →</button>
             </div>
           </div>
-        </>
+        </div>
       )}
-
-      <EntityDrawer entityId={drawer} onClose={() => setDrawer(null)} />
     </div>
   );
 }

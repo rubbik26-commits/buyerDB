@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, money, num, shortDate } from "../api/client.js";
+import { api, money, shortDate } from "../api/client.js";
 
 export function Pill({ kind, children }) {
   return <span className={`pill ${kind}`}>{children}</span>;
@@ -35,8 +35,20 @@ export function EntityDrawer({ entityId, onClose }) {
     if (!entityId) return;
     setData(null);
     setErr(null);
-    api.entity(entityId).then(setData).catch(setErr);
+    // stale-guard: closing A and quickly opening B must not let A's slower
+    // response render A's contacts under B's header
+    let stale = false;
+    api.entity(entityId)
+      .then((d) => { if (!stale) setData(d); })
+      .catch((e) => { if (!stale) setErr(e); });
+    return () => { stale = true; };
   }, [entityId]);
+  useEffect(() => {
+    if (!entityId) return;
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [entityId, onClose]);
   if (!entityId) return null;
   return (
     <div
@@ -50,6 +62,7 @@ export function EntityDrawer({ entityId, onClose }) {
         <button className="btn ghost sm" onClick={onClose} style={{ float: "right" }}>Close</button>
         <ErrorBanner error={err} />
         {!data && !err && <Loading />}
+        {data && !data.entity && <Empty title="Entity not found." />}
         {data && data.entity && (
           <>
             <div className="view-head" style={{ marginBottom: 14 }}>

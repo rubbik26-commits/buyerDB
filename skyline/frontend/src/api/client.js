@@ -15,6 +15,14 @@ const NEEDS_BACKEND =
   "The data tabs are served directly from the database; deploy the backend " +
   "(render.yaml in the repo) to enable uploads, entity merges, and the AI Deal Desk.";
 
+// surface the response body on failure — PostgREST/FastAPI put the actual
+// reason there, and "HTTP 400" alone is undebuggable
+async function fail(label, r) {
+  let detail = "";
+  try { detail = (await r.text()).slice(0, 300); } catch { /* body unreadable */ }
+  throw new Error(`${label} → HTTP ${r.status}${detail ? ` — ${detail}` : ""}`);
+}
+
 async function rpc(fn, args) {
   const r = await fetch(`${SUPA}/rest/v1/rpc/${fn}`, {
     method: "POST",
@@ -25,16 +33,25 @@ async function rpc(fn, args) {
     },
     body: JSON.stringify(args || {}),
   });
-  if (!r.ok) throw new Error(`${fn} → HTTP ${r.status}`);
+  if (!r.ok) await fail(fn, r);
   return r.json();
 }
 
-// drop empty values; coerce numeric strings so SQL arg types line up
+// drop empty values; coerce numeric strings so SQL arg types line up.
+// "$3,000,000" must become 3000000, and anything unparseable is DROPPED —
+// NaN serializes to null, which SQL reads as "no filter": the user would see
+// unfiltered results while believing they filtered.
 function clean(params, numeric = []) {
   const out = {};
   Object.entries(params || {}).forEach(([k, v]) => {
     if (v === undefined || v === null || v === "") return;
-    out[k] = numeric.includes(k) ? Number(v) : v;
+    if (numeric.includes(k)) {
+      const n = Number(String(v).replace(/[$,\s]/g, ""));
+      if (Number.isNaN(n)) return;
+      out[k] = n;
+    } else {
+      out[k] = v;
+    }
   });
   return out;
 }
@@ -47,7 +64,7 @@ async function get(path, params) {
     });
   }
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  if (!r.ok) await fail(path, r);
   return r.json();
 }
 
@@ -57,7 +74,7 @@ async function post(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  if (!r.ok) await fail(path, r);
   return r.json();
 }
 
@@ -115,6 +132,11 @@ const rpcApi = {
   review: ({ limit, ...rest } = {}) =>
     rpc("api_review", { ...clean(rest), ...(limit ? { lim: Number(limit) } : {}) }),
   reviewAct: async ({ review_id, action, user_id }) => {
+    if (action === "confirm_merge") {
+      // entity merges run Python entity-resolution — the RPC layer deliberately
+      // has no write path for them
+      throw new Error(NEEDS_BACKEND);
+    }
     const res = await rpc("api_review_act", { review_id, action, user_id });
     if (res && res.error) throw new Error(res.error);
     return res;
@@ -123,6 +145,9 @@ const rpcApi = {
 };
 
 export const api = RPC_MODE ? rpcApi : legacy;
+// true when the app talks straight to Supabase (no backend): views use this to
+// hide actions that can never succeed in this mode
+export const IS_RPC_MODE = RPC_MODE;
 
 export function money(n, compact = false) {
   if (n === null || n === undefined) return "—";

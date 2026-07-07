@@ -15,6 +15,11 @@ export default function Uploads({ refreshMeta }) {
 
   async function handleFile(file) {
     if (!file) return;
+    // drag-drop bypasses the input's accept filter — fail fast client-side
+    if (!/\.(csv|xlsx?|xls)$/i.test(file.name)) {
+      setErr(new Error(`Unsupported file type: ${file.name}. Use CSV or Excel.`));
+      return;
+    }
     setBusy(true); setErr(null);
     try {
       const res = await api.uploadFile(file);
@@ -31,7 +36,7 @@ export default function Uploads({ refreshMeta }) {
     try {
       const res = await api.resolveUpload({ upload_id: staged.upload_id, mapping, user_id: "broker" });
       if (res.error) throw new Error(res.error);
-      setResult(res);
+      setResult({ ...res, stats: res.stats || {} }); // a stats-less response must not white-screen the tab
       setStage("done");
       refreshMeta && refreshMeta();
     } catch (e) { setErr(e); }

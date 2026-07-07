@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, money, num } from "../api/client.js";
-import { Loading, Empty, ErrorBanner, EntityDrawer } from "../components/ui.jsx";
+import { Loading, Empty, ErrorBanner } from "../components/ui.jsx";
 
 export default function Leaderboards() {
   const [groupBy, setGroupBy] = useState("asset_type");
@@ -9,12 +9,15 @@ export default function Leaderboards() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
-  const [drawer, setDrawer] = useState(null);
+  const seqRef = useRef(0);
 
   const load = useCallback(() => {
+    const seq = ++seqRef.current; // stale responses must not overwrite newer ones
     setLoading(true); setErr(null);
     api.leaderboards({ group_by: groupBy, rank_by: rankBy, top })
-      .then(setData).catch(setErr).finally(() => setLoading(false));
+      .then((d) => { if (seq === seqRef.current) setData(d); })
+      .catch((e) => { if (seq === seqRef.current) setErr(e); })
+      .finally(() => { if (seq === seqRef.current) setLoading(false); });
   }, [groupBy, rankBy, top]);
   useEffect(() => { load(); }, [load]);
 
@@ -60,13 +63,13 @@ export default function Leaderboards() {
         <Empty title="Nothing to rank yet." />
       ) : (
         Object.entries(groups).map(([grp, rows]) => (
-          <div key={grp} style={{ marginBottom: 30 }}>
+          <div key={grp} style={{ marginBottom: 30, opacity: loading ? 0.55 : 1 }}>
             <h2 style={{ fontFamily: "var(--display)", fontSize: 19, fontWeight: 600, margin: "0 0 12px", color: "var(--tx)" }}>
               {grp} <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--tx-mute)" }}>· top {rows.length}</span>
             </h2>
             <div className="tombgrid">
               {rows.map((r) => (
-                <div className="tomb" key={grp + r.name + r.rk} onClick={() => setDrawer(null)}>
+                <div className="tomb" key={grp + r.name + r.rk}>
                   <div className="rank">№ {r.rk}</div>
                   <div className="grp">{grp}</div>
                   <div className="name">{r.name}</div>
@@ -87,7 +90,6 @@ export default function Leaderboards() {
           </div>
         ))
       ))}
-      <EntityDrawer entityId={drawer} onClose={() => setDrawer(null)} />
     </div>
   );
 }

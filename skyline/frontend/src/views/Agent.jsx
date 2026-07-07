@@ -24,7 +24,13 @@ export default function Agent() {
     const question = (q ?? input).trim();
     if (!question || busy) return;
     setInput("");
-    const history = msgs.filter((m) => m.role).map((m) => ({ role: m.role, content: m.role === "user" ? m.text : m.answer || "" }));
+    // roles must be user/assistant (real APIs reject 'agent' with a 400 — every
+    // follow-up turn used to fail once the backend was live), and failed turns
+    // with no answer would inject empty assistant messages
+    const history = msgs
+      .filter((m) => m.role === "user" || m.answer)
+      .map((m) => ({ role: m.role === "user" ? "user" : "assistant",
+                     content: m.role === "user" ? m.text : m.answer }));
     setMsgs((m) => [...m, { role: "user", text: question }]);
     setBusy(true);
     try {
@@ -115,7 +121,7 @@ function Citations({ result }) {
   const rows = [];
   if (result.candidates) result.candidates.slice(0, 6).forEach((c) => rows.push({ nm: c.name, meta: `${num(c.deal_count)} deals · ${money(c.volume, true)}${c.is_spv_suspect ? " · SPV" : ""}${c.has_contact ? " · contact" : ""}` }));
   else if (result.leaders) result.leaders.slice(0, 6).forEach((c) => rows.push({ nm: c.name, meta: `${num(c.n)} deals · ${money(c.vol, true)}` }));
-  else if (result.matches) result.matches.forEach((mm) => (mm.contacts || []).forEach((c) => rows.push({ nm: mm.name, meta: `${c.phone || "no phone"} · ${c.email || "no email"} · ${c.source}` })));
+  else if (result.matches) { result.matches.forEach((mm) => (mm.contacts || []).forEach((c) => rows.push({ nm: mm.name, meta: `${c.phone || "no phone"} · ${c.email || "no email"} · ${c.source}` }))); rows.splice(6); }
   else if (result.sellers) result.sellers.slice(0, 6).forEach((c) => rows.push({ nm: c.name, meta: `${num(c.sales)} sales · ${money(c.vol, true)}` }));
   else if (result.entities_missing_contact) result.entities_missing_contact.slice(0, 6).forEach((c) => rows.push({ nm: c.name, meta: `${num(c.deals)} deals · ${money(c.vol, true)} · no contact` }));
   else if (result.deals) result.deals.slice(0, 6).forEach((c) => rows.push({ nm: c.address, meta: `${c.asset_type || ""} · ${money(c.sale_price, true)}` }));
