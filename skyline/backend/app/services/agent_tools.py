@@ -12,8 +12,14 @@ import re
 from ..db import db, rows
 
 # ── entity resolution shared by the name-taking tools ───────────────────────
+_TRGM_MIN = 0.45
+
+
 def _resolve_entities(cur, name, limit=5):
-    """exact norm_name -> alias -> trigram(>0.45). Returns [(entity_id, display_name, method, score)]."""
+    """exact norm_name -> alias -> trigram(>0.45). Returns [(entity_id, display_name, method, score)].
+    The explicit similarity threshold matters: the %% operator alone uses
+    pg_trgm's default 0.3, weak enough to present a wrong entity's contacts
+    as 'the' match."""
     from shared.normalize import norm_entity
     nn = norm_entity(name)
     if not nn:
@@ -28,8 +34,8 @@ def _resolve_entities(cur, name, limit=5):
     if r:
         return [(x[0], x[1], "alias", 1.0) for x in r]
     cur.execute("""SELECT entity_id, display_name, similarity(norm_name,%s) AS s
-                   FROM entities WHERE norm_name %% %s
-                   ORDER BY s DESC LIMIT %s""", (nn, nn, limit))
+                   FROM entities WHERE norm_name %% %s AND similarity(norm_name,%s) > %s
+                   ORDER BY s DESC LIMIT %s""", (nn, nn, nn, _TRGM_MIN, limit))
     return [(x[0], x[1], "trgm", round(float(x[2]), 3)) for x in cur.fetchall()]
 
 
@@ -213,24 +219,36 @@ _ALLOWED_TABLES = {"deals", "properties", "entities", "entity_aliases", "deal_pa
                    "contacts", "interactions", "review_queue", "exclusion_ledger",
                    "fetch_ledger", "scrape_runs"}
 _FORBIDDEN = re.compile(r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|"
-                        r"copy|call|do|merge|vacuum|reindex|comment|;)\b", re.IGNORECASE)
+                        r"copy|call|do|merge|vacuum|reindex|comment|set_config|pg_sleep|"
+                        r"pg_read_file|pg_ls_dir|dblink|lo_import)\b", re.IGNORECASE)
 
 
 def run_readonly_sql(sql: str, limit: int = 200):
-    """SELECT-only, single statement, allowlisted tables, hard LIMIT, 5s timeout.
-    Anything else is refused with the reason — never executed 'to be helpful'."""
+    """SELECT-only, single statement, allowlisted tables, hard LIMIT, 5s timeout,
+    READ ONLY transaction. Anything else is refused with the reason — never
+    executed 'to be helpful'. This is reachable from an LLM-planned request, so
+    the guard assumes hostile input:
+      - any ';' rejects (psycopg2 executes multi-statement strings; the old
+        \\b;\\b regex never matched a normal 'SELECT 1; SELECT ...')
+      - any '\"' rejects (quoted identifiers like \"app_config\" dodged the
+        table allowlist regex entirely)"""
     s = sql.strip().rstrip(";").strip()
     if not re.match(r"(?is)^\s*(select|with)\b", s):
         return {"error": "Only SELECT/WITH queries are permitted."}
+    if ";" in s:
+        return {"error": "Multiple statements are not permitted."}
+    if '"' in s:
+        return {"error": "Quoted identifiers are not permitted (use unquoted table names)."}
     if _FORBIDDEN.search(s):
-        return {"error": "Query contains a forbidden keyword or multiple statements."}
-    tables = set(re.findall(r"(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_]*)", s, re.IGNORECASE))
-    bad = tables - _ALLOWED_TABLES
+        return {"error": "Query contains a forbidden keyword."}
+    tables = set(re.findall(r"(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_.]*)", s, re.IGNORECASE))
+    bad = {t for t in tables if t.split(".")[-1] not in _ALLOWED_TABLES or t.count(".") > 0}
     if bad:
         return {"error": f"Query references non-allowlisted table(s): {sorted(bad)}"}
     if not re.search(r"\blimit\s+\d+", s, re.IGNORECASE):
         s = f"{s} LIMIT {limit}"
     with db() as conn, conn.cursor() as cur:
+        cur.execute("SET TRANSACTION READ ONLY")
         cur.execute("SET LOCAL statement_timeout = 5000")
         try:
             cur.execute(s)

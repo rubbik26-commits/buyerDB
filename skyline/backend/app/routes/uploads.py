@@ -2,9 +2,10 @@
 
 Flow: upload -> stage rows verbatim -> propose column mapping -> confirm ->
 normalize + resolve entities -> import contacts/interactions (auto-matched) or
-queue ambiguous rows for review. Deal-shaped uploads additionally pass the
-exclusion ledger + no_residential + addr+price dedupe (uploads are exactly the
-"excluded deal re-surfaces" vector the ledger exists for).
+queue ambiguous rows for review. NOTE: this path imports CONTACT/INTERACTION
+shapes only — deal-shaped uploads are not implemented here; deals enter through
+store.merge_deal (worker) or sync_upsert_deals (SQL), where the exclusion
+ledger, no_residential, and dedupe gates live.
 
 Everything is server-side (pandas/openpyxl) so the same normalize functions that
 built the dataset apply to uploads too.
@@ -16,7 +17,9 @@ from pydantic import BaseModel
 from typing import Optional
 from ..db import db, rows
 from ..services import entity_resolution
-from shared.normalize import norm_entity, is_placeholder
+from shared.normalize import norm_entity, is_placeholder, entity_type
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # unauthenticated multi-GB reads are a memory DoS
 
 router = APIRouter(prefix="/api")
 
@@ -66,6 +69,8 @@ def _sniff_mapping(columns):
 async def create_upload(file: UploadFile = File(...), user_id: str = Form("system")):
     """Stage an uploaded CSV/XLSX: parse rows verbatim into upload_rows, propose a mapping."""
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        return {"error": f"file too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)"}
     name = (file.filename or "upload").lower()
     try:
         if name.endswith((".xlsx", ".xls")):
@@ -74,7 +79,9 @@ async def create_upload(file: UploadFile = File(...), user_id: str = Form("syste
             df = pd.read_csv(io.BytesIO(content))
     except Exception as e:
         return {"error": f"could not parse file: {e}"}
-    df = df.where(pd.notna(df), None)
+    # astype(object) first: plain .where() leaves float-column NaNs intact, and
+    # they staged as the string "nan" — which then imported as phone='nan'
+    df = df.astype(object).where(pd.notna(df), None)
     mapping = _sniff_mapping(list(df.columns))
     with db() as conn, conn.cursor() as cur:
         cur.execute("""INSERT INTO uploads (user_id, filename, row_count, column_mapping, status)
@@ -85,6 +92,9 @@ async def create_upload(file: UploadFile = File(...), user_id: str = Form("syste
             cur.execute("INSERT INTO upload_rows (upload_id, row_num, raw) VALUES (%s,%s,%s)",
                         (upload_id, int(i), json.dumps({str(k): (None if v is None else str(v))
                                                         for k, v in row.items()})))
+    # df is all-object with None for missing values by here, so the sample
+    # serializes as valid JSON (float NaN would emit literal NaN and break
+    # the browser's JSON.parse)
     return {"upload_id": str(upload_id), "row_count": len(df), "columns": list(df.columns),
             "proposed_mapping": mapping, "sample": df.head(5).to_dict("records")}
 
@@ -108,16 +118,30 @@ def resolve_upload(body: MappingConfirm):
         return {"error": "mapping must include an entity_name column"}
 
     stats = {"auto_matched": 0, "needs_review": 0, "new_entity": 0, "contacts_created": 0,
-             "interactions_created": 0, "skipped_no_name": 0}
+             "interactions_created": 0, "skipped_no_name": 0, "skipped_undated_notes": 0}
     with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT status FROM uploads WHERE upload_id=%s", (body.upload_id,))
+        u = cur.fetchone()
+        if not u:
+            return {"error": "upload not found"}
+        if u[0] == "imported":
+            # re-POSTing (double-click, retry after timeout) must not duplicate
+            # every contact and interaction
+            return {"error": "upload already imported", "upload_id": body.upload_id}
         cur.execute("UPDATE uploads SET column_mapping=%s, status='resolving' WHERE upload_id=%s",
                     (json.dumps(body.mapping), body.upload_id))
-        cur.execute("SELECT row_num, raw FROM upload_rows WHERE upload_id=%s ORDER BY row_num", (body.upload_id,))
+        cur.execute("""SELECT row_num, raw FROM upload_rows
+                       WHERE upload_id=%s AND status IS DISTINCT FROM 'imported'
+                       ORDER BY row_num""", (body.upload_id,))
         staged = cur.fetchall()
 
         def val(raw, canon):
             src = inv.get(canon)
-            return raw.get(src) if src else None
+            v = raw.get(src) if src else None
+            if v is None:
+                return None
+            s = str(v).strip()
+            return None if not s or s.lower() in ("nan", "none", "null") else s
 
         for row_num, raw in staged:
             ename = val(raw, "entity_name")
@@ -144,10 +168,9 @@ def resolve_upload(body: MappingConfirm):
                 entity_id = res["entity_id"]; stats["auto_matched"] += 1
             else:  # no_match -> create a new entity
                 nn = norm_entity(ename)
-                etype = "llc" if "LLC" in nn else ("corp" if "INC" in nn or "CORP" in nn else "unknown")
                 cur.execute("""INSERT INTO entities (display_name, norm_name, entity_type)
                                VALUES (%s,%s,%s) ON CONFLICT (norm_name) DO UPDATE SET norm_name=EXCLUDED.norm_name
-                               RETURNING entity_id""", (str(ename).strip(), nn, etype))
+                               RETURNING entity_id""", (str(ename).strip(), nn, entity_type(nn)))
                 entity_id = str(cur.fetchone()[0]); stats["new_entity"] += 1
 
             _import_contact(cur, entity_id, raw, val, body, stats)
@@ -182,6 +205,10 @@ def _import_contact(cur, entity_id, raw, val, body, stats):
             cur.execute("""INSERT INTO interactions (entity_id, user_id, channel, occurred_at, notes)
                            VALUES (%s,%s,%s,%s,%s)""", (entity_id, body.user_id, ch, ts, notes))
             stats["interactions_created"] += 1
+        else:
+            # occurred_at is NOT NULL, so notes without a parseable date can't
+            # insert — count the drop instead of losing it invisibly
+            stats["skipped_undated_notes"] += 1
 
 
 @router.get("/uploads")

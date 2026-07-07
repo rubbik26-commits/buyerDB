@@ -18,7 +18,8 @@ import psycopg2
 import psycopg2.extras
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from shared.normalize import norm_entity, split_address, normalize_address, is_placeholder, spv_suspect
+from shared.normalize import (norm_entity, split_address, normalize_address,
+                              is_placeholder, spv_suspect, entity_type)
 
 DB = os.environ.get("DATABASE_URL", "postgresql://skyline:skyline_dev@localhost/skyline")
 
@@ -26,7 +27,7 @@ ACRIS_DOC_RE = re.compile(r"doc_id=([A-Z0-9]+)")
 PARTIES_ACRIS_RE = re.compile(r"parties from ACRIS (\w+) \(amount(?:-gated)?\)")
 
 
-def src_system(url, notes):
+def src_system(url):
     u = str(url or "")
     if "a836-acris" in u: return "acris"
     if "traded.co" in u:  return "traded"
@@ -35,10 +36,20 @@ def src_system(url, notes):
     return "other"
 
 
-def main(csv_path, exclusions_path=None):
+def main(csv_path, exclusions_path=None, force=False):
     df = pd.read_csv(csv_path, low_memory=False)
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
+
+    # one-time migration: deals has no natural-key conflict target, so a re-run
+    # would double every deal — refuse unless explicitly forced
+    cur.execute("SELECT count(*) FROM deals")
+    existing = cur.fetchone()[0]
+    if existing and not force:
+        print(f"ABORT: deals already has {existing} rows; re-running would duplicate them. "
+              f"Pass --force to override.")
+        conn.close()
+        sys.exit(2)
 
     # ── properties ──
     prop_ids = {}
@@ -64,24 +75,24 @@ def main(csv_path, exclusions_path=None):
             return None
         if nn in ent_ids:
             return ent_ids[nn]
-        etype = "llc" if "LLC" in nn else ("corp" if re.search(r"\b(INC|CORP)\b", nn) else "unknown")
         cur.execute(
             """INSERT INTO entities (display_name, norm_name, entity_type, is_spv_suspect)
                VALUES (%s,%s,%s,%s) ON CONFLICT (norm_name) DO UPDATE SET norm_name=EXCLUDED.norm_name
                RETURNING entity_id""",
-            (str(display).strip(), nn, etype, spv_suspect(nn, all_addr_norms)))
+            (str(display).strip(), nn, entity_type(nn), spv_suspect(nn, all_addr_norms)))
         ent_ids[nn] = cur.fetchone()[0]
         return ent_ids[nn]
 
     # ── deals + parties + contacts ──
     n_deals = n_parties = n_contacts = n_review = 0
-    seen_docids, seen_shortcodes = set(), set()
+    seen_docids, seen_shortcodes, seen_contacts = set(), set(), set()
     for i, r in df.iterrows():
         key = (normalize_address(r["Address"]), r["Borough"] if pd.notna(r["Borough"]) else None)
         notes = str(r["Notes"]) if pd.notna(r["Notes"]) else ""
-        src = src_system(r["Source URL"], notes)
+        src = src_system(r["Source URL"])
         m = ACRIS_DOC_RE.search(str(r["Source URL"] or ""))
-        doc_id = m.group(1) if m else None
+        orig_doc_id = m.group(1) if m else None
+        doc_id = orig_doc_id
         if doc_id in seen_docids:
             doc_id = None                      # UNIQUE guard; duplicate doc under 2 rows -> keep 2nd row without doc key
         shortcode = r["Shortcode"] if pd.notna(r["Shortcode"]) else None
@@ -112,7 +123,9 @@ def main(csv_path, exclusions_path=None):
         if pm:                       # cross-source ACRIS party attachment (amount-gated match)
             party_src, prov, gate = "acris", pm.group(1), True
         elif src == "acris":         # ACRIS-native deal: parties from the deed itself;
-            party_src, prov, gate = "acris", doc_id, True   # price == document_amt by construction (phase3 build)
+            # orig_doc_id, not the deduped one: provenance must survive even
+            # when the acris_doc_id column was nulled for uniqueness (invariant 7)
+            party_src, prov, gate = "acris", orig_doc_id, True   # price == document_amt by construction (phase3 build)
         else:
             party_src = src
             prov = r["Source URL"] if pd.notna(r["Source URL"]) else None
@@ -136,13 +149,16 @@ def main(csv_path, exclusions_path=None):
             pre = "Buyer" if role == "buyer" else "Seller"
             phone = r.get(f"{pre} Phone"); email = r.get(f"{pre} Email")
             if (pd.notna(phone) and str(phone).strip()) or (pd.notna(email) and str(email).strip()):
-                cur.execute(
-                    """INSERT INTO contacts (entity_id, phone, email, mailing_address, source)
-                       VALUES (%s,%s,%s,%s,%s)""",
-                    (eid, str(phone).strip() if pd.notna(phone) else None,
-                     str(email).strip() if pd.notna(email) else None,
-                     r[addr_col] if pd.notna(r[addr_col]) else None, "traded"))
-                n_contacts += 1
+                ckey = (eid, str(phone).strip() if pd.notna(phone) else None,
+                        str(email).strip() if pd.notna(email) else None)
+                if ckey not in seen_contacts:  # a repeat buyer's phone on 5 CSV rows is ONE contact
+                    seen_contacts.add(ckey)
+                    cur.execute(
+                        """INSERT INTO contacts (entity_id, phone, email, mailing_address, source)
+                           VALUES (%s,%s,%s,%s,%s)""",
+                        (ckey[0], ckey[1], ckey[2],
+                         r[addr_col] if pd.notna(r[addr_col]) else None, "traded"))
+                    n_contacts += 1
 
         if r["Parse Status"] == "needs_review":
             cur.execute(
@@ -170,4 +186,5 @@ def main(csv_path, exclusions_path=None):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
+    args = [a for a in sys.argv[1:] if a != "--force"]
+    main(args[0], args[1] if len(args) > 1 else None, force="--force" in sys.argv)
