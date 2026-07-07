@@ -51,3 +51,37 @@ and credit-budget decision. Base44 was the earlier alternative host (blueprint �
 - Is anything currently deployed (Netlify site, Render service), or is this repo the whole state?
 - What does "buyerDB" mean to the user beyond the existing system — a new deliverable
   (e.g. buyer-matching outreach engine, Apollo-enriched contact DB) or productionizing what exists?
+
+## 2026-07-07 — Full-system review findings (branch claude/system-debug-refactor-724uem)
+
+Six parallel reviewers read every file; the load-bearing findings and their fixes:
+
+1. **Edge-function auth failed OPEN (HIGH/security).** `body.secret !== conf.X` with a
+   missing `app_config` row made `undefined !== undefined` → false → request authorized.
+   Affected crexi-ingest/crexi-run/dos-enrich/skyline-sync (service-role write path).
+   Fixed: fail-closed `authorized()` in `supabase/functions/_shared/mod.ts`.
+2. **Amount gate was rubber-stamped (HIGH/invariant 1).** `sync_upsert_deals` set
+   `amount_gate_passed=true, verified_deed_amount=price` for any `source_system='acris'`
+   row — circular, caller-asserted. Migration 009 computes the 3% rule from an explicit
+   `deed_amount` (acris-v2 now sends it); no evidence → party blocked + review_queue.
+3. **`api_buyers` / `/buyers` inflated counts** by the contacts LEFT JOIN (n×contacts) —
+   widespread after the 1,521-contact harvest. Fixed to EXISTS in both transports.
+4. **`api_review_act` was an anonymous write** — anon key could resolve/dismiss conflicts.
+   Revoked from anon (migration 009).
+5. **Behavioral rule 6 unenforced** — quality-lane degradation could send contacts rows to
+   Gemini. Added a per-request provider deny-list; synthesis always excludes Gemini.
+6. **`run_readonly_sql` bypassable** from an LLM-planned query: quoted identifiers dodged the
+   table allowlist, `;` multi-statement never matched — `SELECT * FROM "app_config"` could
+   read the sync secret. Closed + READ ONLY transaction.
+7. **Silent worker data-loss**: transient 403 permanently blacklisted a URL via fetch_ledger;
+   SoQL apostrophe (O'Callahan class) 400'd whole streets as no_legals; zero-price deal
+   crashed phase 2; conflicting ACRIS parties attached silently (now flag review_queue);
+   the test suite wiped the prod scrape_runs audit trail.
+8. **Frontend**: "$3,000,000" typed into a filter → NaN → null → filter silently disabled;
+   `role:"agent"` history would 400 every follow-up once a backend exists; five fetch races.
+9. **Migrations 007/008 were comment stubs** — real applied SQL exported verbatim from prod.
+10. **Seeds** were positional `pg_dump` inserts (no column list / ON CONFLICT / transaction)
+    — hardened to be column-explicit, idempotent, and atomic.
+
+Nothing in prod was changed by this branch; migration 009 + edge-fn v2 sources are staged
+for a single user-run deploy window (decision D-011).

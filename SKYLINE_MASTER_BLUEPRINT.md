@@ -1,6 +1,23 @@
 # SKYLINE DEAL INTELLIGENCE — MASTER BLUEPRINT
 ## Converting the artifact + Python pipeline into a production React application
 
+> **⚠️ Historical snapshot (2026-07-02).** This is the original architecture
+> analysis, preserved as a dated record (constitution decision D-002: inherited
+> research, not the approved Blueprint). Several conclusions were later
+> superseded and should be read against the decisions log:
+> - **Base44 is OUT of the system** (D-010). Where this doc keeps Base44 "as a
+>   fallback host" or lists its hardcoded-key rotation as step 0, that debt is
+>   retired — the Base44 hop (and its exposed keys) no longer exist in the live
+>   path. The Base44 contact data was harvested into Supabase first.
+> - **The live refresh is Supabase-native pg_cron → edge functions →
+>   `sync_upsert_deals()`** (D-008), not the GitHub-Actions worker (now a gated
+>   legacy fallback). See `architecture/SOP-daily-refresh.md`.
+> - Live counts have moved on (4,129 CSV snapshot → 4,533 deals as of
+>   2026-07-06); migrations now run 001–008 applied + 009 staged (2026-07-07).
+>
+> The dataset shape, invariants, transport constraints (curl_cffi vs
+> ScraperAPI), and provider research below remain accurate and load-bearing.
+
 **Written 2026-07-02.** Every dataset number below was re-verified in this session against the actual CSV (not copied from the handoff). Every free-tier and scheduler number was researched today with sources named. Facts I could not verify are marked **TO-VERIFY**.
 
 **Evidence disclosure (protocol):** `HANDOFF.md`, `README.md`, and all eight Python modules were read in full from the project directory. `Potential_Blueprint.docx` was extracted with pandoc and read in full (481 lines). The canonical CSV was loaded and independently verified: **4,129 rows × 27 columns; Buyer 79%, Seller 78%, addresses 65%, phone/email 2%, price 93%; 372 needs_review; sources = ACRIS 2,482 / traded 964 / crexi 594 / other 89** — every figure matches the handoff exactly. One honest caveat: `skyline-deal-intelligence.jsx` appeared in the uploads list but did not land on disk in this session. Its internals below (record shape, tabs, Agent Desk pipeline) are taken from the verbatim build records of the session that created it — including the actual `CRITERIA_PROMPT`, `rankCandidates`, `buyerProfileText`, and `callClaude` source — not from memory or the handoff summary.

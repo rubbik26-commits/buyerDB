@@ -9,6 +9,9 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     plan: free
+    # Render polls this to know the service is live and to avoid routing to a
+    # cold/dead instance; /api/health returns 200 with the deal count.
+    healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL          # Supabase → Connect → Session pooler URI
         sync: false

@@ -178,6 +178,7 @@ export default function Deals({ meta }) {
                                     <a className="btn ghost sm" href={d.source_url} target="_blank" rel="noreferrer">Open source</a>}
                                 </div>
                               </div>
+                              {d.notes && <div className="notes">{d.notes}</div>}
                             </div>
                           </td>
                         </tr>

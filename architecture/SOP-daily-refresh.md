@@ -3,6 +3,16 @@
 **Goal:** buyerdb.netlify.app always shows yesterday's new NYC CRE deals without
 anyone touching anything.
 
+> **2026-07-07 update (maintenance pass).** The edge-function sources in
+> `skyline/supabase/functions/` were reviewed and rewritten: fail-closed auth, a
+> shared `_shared/mod.ts` module (one address normalizer, one config loader),
+> and honest failure reporting. `sync_upsert_deals` was hardened in
+> **`009_hardening.sql` (STAGED, not yet applied)** — it now verifies the amount
+> gate from an explicit `deed_amount` (acris-v2 sends it), flags conflicts to
+> `review_queue`, and takes an advisory lock. **Deploy in one window:** apply
+> 009, then deploy the six function sources, then verify one skyline-sync run.
+> The prod cutover state below is unchanged by that staging.
+
 ## ⚡ 2026-07-06 (late): Base44 removal in progress — cutover state
 
 User directive: Base44 is NOT part of this system. Cutover to direct

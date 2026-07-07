@@ -1,4 +1,9 @@
-INSERT INTO public.entities VALUES
+-- Seed data (pg_dump-derived). Hardened 2026-07-07: explicit column
+-- lists (survive a future ALTER ADD COLUMN), ON CONFLICT DO NOTHING
+-- (idempotent re-run), and one transaction (all-or-nothing).
+BEGIN;
+
+INSERT INTO public.entities (entity_id,display_name,norm_name,entity_type,is_spv_suspect,mailing_address,created_at) VALUES
 	('05fe1929-5231-42db-abc8-d21e683f4c1b', 'EMPIRE 261 CANAL LLC', 'EMPIRE 261 CANAL LLC', 'llc', false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('6a9aa35a-1b7e-4d2b-a3ec-40f7a4ad1042', '267 CANAL STREET CORP.', '267 CANAL STREET CORP.', 'corp', true, NULL, '2026-07-06 16:03:02.062987+00'),
 	('3326b23b-581a-417e-99a8-ba15670f87d8', 'AA 3571 LLC', 'AA 3571 LLC', 'llc', false, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -298,8 +303,8 @@ INSERT INTO public.entities VALUES
 	('3594a76c-ca5f-45d9-99f2-c08616a8448f', 'JOHN E. DEDERICK, CO-TRUSTEE', 'JOHN E. DEDERICK, CO-TRUSTEE', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('36109078-add7-4760-ae60-88144b41c99e', 'RoseMary Hayden', 'ROSEMARY HAYDEN', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('bd752418-1434-4edf-bad2-1eb71b30f3a3', 'Daniel Lebensohn', 'DANIEL LEBENSOHN', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00'),
-	('bc7e2876-21c6-4942-940c-2c7598061f20', 'Abraham Robenzadeh', 'ABRAHAM ROBENZADEH', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.entities VALUES
+	('bc7e2876-21c6-4942-940c-2c7598061f20', 'Abraham Robenzadeh', 'ABRAHAM ROBENZADEH', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.entities (entity_id,display_name,norm_name,entity_type,is_spv_suspect,mailing_address,created_at) VALUES
 	('34d5d27c-c748-4a21-aec5-4bd6ea803344', '191 AUDUBON CORP.', '191 AUDUBON CORP.', 'corp', true, NULL, '2026-07-06 16:03:02.062987+00'),
 	('728cd9f3-3379-478e-91cc-f68fb8e834a8', 'BLACKBERRY MEADOW HOLDINGS LLC', 'BLACKBERRY MEADOW HOLDINGS LLC', 'llc', false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('4e39c95e-d171-4768-9f69-4638c472daae', 'Soly Halabi', 'SOLY HALABI', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -310,8 +315,8 @@ INSERT INTO public.entities VALUES
 	('dd4d012b-ae5a-4df2-a291-4f26733e2bce', 'Greenbrook Partners', 'GREENBROOK PARTNERS', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('abdff82d-f244-49e5-88f4-f5d2887e9276', 'Index Invest & Fortress', 'INDEX INVEST & FORTRESS', 'unknown', false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('e2d1fd56-aa6b-45e1-ae70-3791aab1dccf', 'MI 8787 LLC', 'MI 8787 LLC', 'llc', false, NULL, '2026-07-06 16:03:02.062987+00'),
-	('ac4cd916-686a-4855-be66-bd070b60912a', '39-37-35 EAST 63RD RESIDENTIAL LLC', '39-37-35 EAST 63RD RESIDENTIAL LLC', 'llc', false, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.contacts VALUES
+	('ac4cd916-686a-4855-be66-bd070b60912a', '39-37-35 EAST 63RD RESIDENTIAL LLC', '39-37-35 EAST 63RD RESIDENTIAL LLC', 'llc', false, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.contacts (contact_id,entity_id,person_name,title,phone,email,mailing_address,source,confidence,is_primary,created_by,created_at) VALUES
 	('30748142-e032-468c-9ed6-8a4931192570', '075e3776-393e-4f51-a4a6-e04b5abfad27', NULL, NULL, '(212) 419-3149', 'info@cscre.us', '459 Columbus Avenue, Unit 1082, New York, NY 10024', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('ebc5b14a-d648-4276-8383-341ab3110784', 'bc3aa6a5-4bbb-4fc1-b1f4-ba70a4877af6', NULL, NULL, '(212) 688-0700', 'spress@perlbinderrealty.com', '429 East 52nd Street, New York, NY 10022', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('1aa1bdb1-6364-42ef-902d-8f76981099ee', 'fd2b331c-3de3-4678-b90a-b46cdb52e637', NULL, NULL, NULL, 'koho@mori-trust.co.jp', 'Kamiyacho Trust Tower, 4-1-1 Toranomon, Minato-ku, Tokyo 105-6903, Japan', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00'),
@@ -482,8 +487,8 @@ INSERT INTO public.contacts VALUES
 	('0618bb07-9ce6-47b0-8fcc-d18a83fa8462', 'e91aa25f-8a59-49ae-ae73-66678edf3db3', NULL, NULL, '(401) 886-4484', 'info@magnahospitality.com', '300 Centerville Rd, Suite 300, Warwick, RI 02886', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('c8630afa-d739-4e82-af28-58a2dbbd15aa', '0bc99aec-f653-4848-bd35-61a991d331e5', NULL, NULL, '(516) 773-9300', NULL, '420 Great Neck Road, Great Neck, NY 11021', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00'),
 	('a66bf684-421a-4a97-9f14-08f29623d195', 'ae1ad04d-aa4c-41ac-97f2-76a533b61648', NULL, NULL, '(617) 658-1596', NULL, '400 Centre Street, Newton, MA 02458', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00'),
-	('80c288a5-285b-41b2-9433-5c2794e235a5', '504804cf-9a73-4378-b601-2daf4d74f451', NULL, NULL, '(212) 465-3731', NULL, '551 Fifth Avenue, New York, NY 10176', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('80c288a5-285b-41b2-9433-5c2794e235a5', '504804cf-9a73-4378-b601-2daf4d74f451', NULL, NULL, '(212) 465-3731', NULL, '551 Fifth Avenue, New York, NY 10176', 'traded', 100, false, NULL, '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('a70f6597-70ca-4bf1-b32d-5c297f41e78e', '1528 Williamsbridge Road', '1528 williamsbridge rd', '1528', 'WILLIAMSBRIDGE RD', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('852104fb-26e5-4e63-b56e-4ab3a39d0c17', '51 East 193rd Street', '51 e 193 st', '51', 'E 193 ST', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('5dff52df-0056-48c3-a35c-2e63e40d09e9', '89-03 57th Avenue', '89-03 57 ave', '89-03', '57 AVE', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -783,8 +788,8 @@ INSERT INTO public.properties VALUES
 	('ceb9315c-6746-40e1-ba83-7c58b0b6d450', '411 W Broadway', '411 w broadway', '411', 'W BWAY', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('1b730fa1-1a0a-4b7d-ace2-634dea834ded', '47-30 Vernon', '47-30 vernon', '47-30', 'VERNON', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('ec4496e5-9d6c-4536-8e84-a0b0387f54f0', '1442 3rd Avenue', '1442 3 ave', '1442', '3 AVE', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('7e219a2a-0508-4215-bb76-8d4fd0c8f4b5', '360 W 42nd Street', '360 w 42 st', '360', 'W 42 ST', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('7e219a2a-0508-4215-bb76-8d4fd0c8f4b5', '360 W 42nd Street', '360 w 42 st', '360', 'W 42 ST', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('8f399ea3-2dad-4870-8c55-ab6a07fe249c', '48 W 48th Street', '48 w 48 st', '48', 'W 48 ST', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('caba8fce-92ae-4484-b2cd-ff01a3cc67c3', '23-35 Bell Boulevard LF', '23-35 bell blvd lf', '23-35', 'BELL BLVD LF', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('f7afb6bd-08b0-4345-9eda-91d4d3cba817', '161-07 Northern Boulevard', '161-07 northern blvd', '161-07', 'NORTHERN BLVD', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -1084,8 +1089,8 @@ INSERT INTO public.properties VALUES
 	('f3cdc137-6ddd-410a-8821-1271c77859c7', '432 Hudson Street', '432 hudson st', '432', 'HUDSON ST', 'Manhattan', 'West Village', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('55f356bc-1fc3-4d92-bf88-ab1c82d9e839', '235 West 107th Street', '235 w 107 st', '235', 'W 107 ST', 'Manhattan', 'Upper West Side', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('745180ba-5eef-4340-bbda-62c204f6d520', '440 West 57th Street', '440 w 57 st', '440', 'W 57 ST', 'Manhattan', 'Midtown', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('be8ece09-dfcb-40ee-aa23-421c5d1ad08e', '84 William Street', '84 william st', '84', 'WILLIAM ST', 'Manhattan', 'Financial District', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('be8ece09-dfcb-40ee-aa23-421c5d1ad08e', '84 William Street', '84 william st', '84', 'WILLIAM ST', 'Manhattan', 'Financial District', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('4cc8c258-ca65-433c-a55e-5580e02a1c97', '130 West 44th Street', '130 w 44 st', '130', 'W 44 ST', 'Manhattan', 'Midtown West', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('33ad04d5-627d-4f57-b306-a6e07f562d75', '1141 Broadway', '1141 broadway', '1141', 'BWAY', 'Manhattan', 'Flatiron', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('895222e4-7758-4308-8dac-6c8649ce5ae9', '723 Bristol Street', '723 bristol st', '723', 'BRISTOL ST', 'Brooklyn', 'Canarsie', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -1385,8 +1390,8 @@ INSERT INTO public.properties VALUES
 	('feb37d22-0040-443f-80ed-a2e4b7c059c8', '4103 162nd Street', '4103 162 st', '4103', '162 ST', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('2f1c3fcf-5d04-4a60-bec8-095c7bc1a6d8', '8794 Parsons Blvd', '8794 parsons blvd', '8794', 'PARSONS BLVD', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('1c20d622-a5dd-4bd9-bc82-bc27ffb2ff39', '133 E 80th St', '133 e 80 st', '133', 'E 80 ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('f7a9da8e-68fc-4488-b591-3e6ed3461544', '4158 71st Street P2', '4158 71 st p2', '4158', '71 ST P2', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('f7a9da8e-68fc-4488-b591-3e6ed3461544', '4158 71st Street P2', '4158 71 st p2', '4158', '71 ST P2', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('141155e6-9d60-45e5-89c9-c3db8a5f935e', '71-01 Northern blvd', '71-01 northern blvd', '71-01', 'NORTHERN BLVD', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('198ad400-762b-4aed-9434-d71fc67cc778', '86-55 Broadway 4', '86-55 broadway 4', '86-55', 'BWAY 4', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('79ca9789-2967-43e8-b1a3-da2273462e4e', '298 Broome St', '298 broome st', '298', 'BROOME ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -1686,8 +1691,8 @@ INSERT INTO public.properties VALUES
 	('18a380da-8e25-4f04-bf10-b27ee6551c4e', '981 Hempstead Turnpike', '981 hempstead turnpike', '981', 'HEMPSTEAD TURNPIKE', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('a27f4354-0f54-4b04-b07b-bd75abc3fe01', '4179 Bronxwood Avenue', '4179 bronxwood ave', '4179', 'BRONXWOOD AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('9648dee9-4286-4bdf-98d3-3ba06a13fc85', '148 Spring Street', '148 spring st', '148', 'SPRING ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('e2f53f62-a005-41a8-9a50-95c29c787a08', '15 RENWICK STREET Manhattan NY', '15 renwick st', '15', 'RENWICK ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('e2f53f62-a005-41a8-9a50-95c29c787a08', '15 RENWICK STREET Manhattan NY', '15 renwick st', '15', 'RENWICK ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('370358d0-280b-4d3a-8d48-ac78ca0c83cf', '1355 PACIFIC STREET Brooklyn NY', '1355 pacific st', '1355', 'PACIFIC ST', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('7c4007b1-1b3b-4708-8a28-046cd9c16b6e', '310 EAST 86TH STREET Manhattan NY', '310 e 86 st', '310', 'E 86 ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('014defbb-cf27-4ceb-8908-539f933f750b', '196 LAWRENCE AVENUE Brooklyn NY', '196 lawrence ave', '196', 'LAWRENCE AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -1987,8 +1992,8 @@ INSERT INTO public.properties VALUES
 	('eef45e5b-0c53-4dc6-966a-134ef34c6620', '61 PENNSYLVANIA AVENUE Brooklyn NY', '61 pennsylvania ave', '61', 'PENNSYLVANIA AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('7c4464cf-2465-40c5-a4c1-709e4259a406', '91-12 144th Pl', '91-12 144 pl', '91-12', '144 PL', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('756433c4-f97e-487a-ba9e-341ca8f57e46', '595 Berriman Street', '595 berriman st', '595', 'BERRIMAN ST', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('b2ae49bd-ad6b-482e-baba-bf1442f9cd72', '318 Bedford Ave', '318 bedford ave', '318', 'BEDFORD AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('b2ae49bd-ad6b-482e-baba-bf1442f9cd72', '318 Bedford Ave', '318 bedford ave', '318', 'BEDFORD AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('455766c0-72a7-4c69-acb1-eb8e35830d82', '201 Allen St', '201 allen st', '201', 'ALLEN ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('c4a5192a-ac1b-4b95-bb5e-0d7e69c05f52', '14024 31st Drive CF', '14024 31 dr cf', '14024', '31 DR CF', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('f72c7808-f443-423e-8112-a080770218fe', '73 STARR STREET Brooklyn NY', '73 starr st', '73', 'STARR ST', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -2288,8 +2293,8 @@ INSERT INTO public.properties VALUES
 	('c019234a-62f7-44ab-9c07-04c506a08511', '759 DEKALB AVENUE Brooklyn NY', '759 dekalb ave', '759', 'DEKALB AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('6dd9ea89-916f-4071-8295-28b35e1a2208', '86 QUENTIN ROAD Brooklyn NY', '86 quentin rd', '86', 'QUENTIN RD', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('8b27c740-bfb2-47a7-816f-663d6a4eb7c0', '261 WALTON AVENUE Bronx NY', '261 walton ave', '261', 'WALTON AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('1adf6055-50a5-4c04-93bc-3ac4e6ed5597', '1025 ATLANTIC AVENUE Brooklyn NY', '1025 atlantic ave', '1025', 'ATLANTIC AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('1adf6055-50a5-4c04-93bc-3ac4e6ed5597', '1025 ATLANTIC AVENUE Brooklyn NY', '1025 atlantic ave', '1025', 'ATLANTIC AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('474355bc-e221-497a-a8fd-1443ae46099a', '926 CLARKSON AVE Brooklyn NY', '926 clarkson ave', '926', 'CLARKSON AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('2c8498ed-0fca-4cad-b14d-a5255f411594', '645 4 AVENUE Brooklyn NY', '645 4 ave', '645', '4 AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('c84158dd-d6de-4763-82b7-49ba5f7dba13', '4405 8TH AVENUE Brooklyn NY', '4405 8 ave', '4405', '8 AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -2589,8 +2594,8 @@ INSERT INTO public.properties VALUES
 	('817217c6-d436-421b-82f5-927bdcae73ee', '549 BROADWAY Manhattan NY', '549 broadway', '549', 'BWAY', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('1f22c5c1-7a61-4aea-bddb-1dc6b5966dfc', '239 48TH STREET Brooklyn NY', '239 48 st', '239', '48 ST', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('2693fa1f-61d3-413e-9732-eb6a41d1d2db', '106 7 AVENUE Manhattan NY', '106 7 ave', '106', '7 AVE', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('2dc8e86e-29d3-4c6b-97ab-8c14202c241f', '1219 ELDER AVENUE Bronx NY', '1219 elder ave', '1219', 'ELDER AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('2dc8e86e-29d3-4c6b-97ab-8c14202c241f', '1219 ELDER AVENUE Bronx NY', '1219 elder ave', '1219', 'ELDER AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('c2ad39da-51c8-44d6-b088-65c0a9e4769e', '541 WEST 21 STREET Manhattan NY', '541 w 21 st', '541', 'W 21 ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('2e4bf599-65bb-46ee-b024-ba5f67444d31', '63 Irving Place', '63 irving pl', '63', 'IRVING PL', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('a5a2fe98-60db-4788-ae0b-03d747fd31d3', '79 NASSAU STREET Manhattan NY', '79 nassau st', '79', 'NASSAU ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -2890,8 +2895,8 @@ INSERT INTO public.properties VALUES
 	('8c9e9f22-6edf-433c-91c1-160e9930c4e8', '20 WEST 33 STREET Manhattan NY', '20 w 33 st', '20', 'W 33 ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('ac5b2a91-56fa-421a-af1d-cd80f8fb2ec7', '97 WEST STREET Brooklyn NY', '97 w st', '97', 'W ST', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('89743987-8e18-4990-b8ba-e468a4e2d1b9', '313 KNICKERBOCKER AVENUE Brooklyn NY', '313 knickerbocker ave', '313', 'KNICKERBOCKER AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('114a4ccb-0341-4004-a280-426eacfd7568', '338 WILSON AVENUE Brooklyn NY', '338 wilson ave', '338', 'WILSON AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('114a4ccb-0341-4004-a280-426eacfd7568', '338 WILSON AVENUE Brooklyn NY', '338 wilson ave', '338', 'WILSON AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('705e0a92-8452-451a-b90c-55fcb4aa1c89', '1576 3 AVENUE Manhattan NY', '1576 3 ave', '1576', '3 AVE', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('d068c790-1b81-48e0-9032-bb0cf163e586', '2736 PITKIN AVE Brooklyn NY', '2736 pitkin ave', '2736', 'PITKIN AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('03d68e81-0293-451c-af14-504cb17425f2', '1874 MADISON STREET Queens NY', '1874 madison st', '1874', 'MADISON ST', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -3191,8 +3196,8 @@ INSERT INTO public.properties VALUES
 	('a41bdf0f-bb5d-4086-b9b0-07df9ab51c90', '4019 PAULDING AVENUE Bronx NY', '4019 paulding ave', '4019', 'PAULDING AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('036efe06-0a3a-44f1-ad78-260a07cba6fd', '3314 34 AVE Queens NY', '3314 34 ave', '3314', '34 AVE', 'Queens', 'queens', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('9ef7784a-aea8-49c0-9efa-2bdb41570307', '833 MANHATTAN AVENUE Brooklyn NY', '833 ave', '833', '', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('21db9dc9-b8ec-4f37-b9f4-3bb55b9b190a', '3209 DECATUR AVENUE Bronx NY', '3209 decatur ave', '3209', 'DECATUR AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
-INSERT INTO public.properties VALUES
+	('21db9dc9-b8ec-4f37-b9f4-3bb55b9b190a', '3209 DECATUR AVENUE Bronx NY', '3209 decatur ave', '3209', 'DECATUR AVE', 'Bronx', 'bronx', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.properties (property_id,address_raw,address_norm,street_number,street_name_canon,borough,market,zip,bbl,units,sqft,year_built,bldg_class,created_at,updated_at) VALUES
 	('f39bbfc6-d5ee-4d3a-90a0-a57e8b75a63b', '1574 50 STREET Brooklyn NY', '1574 50 st', '1574', '50 ST', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('22b836ed-ff43-4e1c-809f-f7134dbc3be6', '445 5 AVENUE Manhattan NY', '445 5 ave', '445', '5 AVE', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('1ac0167a-5777-48bd-9d0e-b668e2178c0e', '1409 MYRTLE AVENUE Brooklyn NY', '1409 myrtle ave', '1409', 'MYRTLE AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
@@ -3492,4 +3497,6 @@ INSERT INTO public.properties VALUES
 	('72bf48a2-d689-4c2a-b7a4-52422524202f', '545 WEST 25TH STREET Manhattan NY', '545 w 25 st', '545', 'W 25 ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('906b8351-8379-44b3-bc0a-43477518d4f1', '6619 18TH AVENUE Brooklyn NY', '6619 18 ave', '6619', '18 AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
 	('4756d6d0-01e6-4f97-96ef-d7b1ca696a3d', '55 WEST 17 STREET Manhattan NY', '55 w 17 st', '55', 'W 17 ST', 'Manhattan', 'manhattan', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00'),
-	('3ba2c95e-846f-4e82-9c3c-b4299a20b167', '3623 15 AVENUE Brooklyn NY', '3623 15 ave', '3623', '15 AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00');
+	('3ba2c95e-846f-4e82-9c3c-b4299a20b167', '3623 15 AVENUE Brooklyn NY', '3623 15 ave', '3623', '15 AVE', 'Brooklyn', 'brooklyn', NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-06 16:03:02.062987+00', '2026-07-06 16:03:02.062987+00') ON CONFLICT DO NOTHING;
+
+COMMIT;

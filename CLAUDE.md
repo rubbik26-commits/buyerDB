@@ -15,10 +15,18 @@ Living memory lives in `/memory/` — read `task_plan.md`, `findings.md`, `progr
 | A — Architect | ✅ 2026-07-06 | `sync_upsert_deals()` (migrations 005/006) + `skyline-sync` edge fn; SOPs in `/architecture/` |
 | S — Stylize | ✅ (pre-existing) | payload = the live app; four tabs already styled and serving |
 | T — Trigger | ✅ 2026-07-06 | pg_cron job `skyline-sync-daily` 07:40 UTC armed & verified; full trigger map in SOP-daily-refresh.md |
+| M — Maintenance | ✅ 2026-07-07 | full-system read/optimize/improve pass on branch `claude/system-debug-refactor-724uem`: every file reviewed; verified fixes across worker/backend/frontend/edge-fns/SQL/infra; migration 009 + edge-fn v2 sources STAGED (D-011). 27 tests + 13 assertions green on a fresh DB |
 
 **Protocol 0 halt lifted 2026-07-06:** all five discovery questions answered by the user,
 Payload shape confirmed below, Blueprint approved in `task_plan.md`. `/execution/` may now
 hold Phase L probe scripts and approved tools.
+
+**Maintenance pass 2026-07-07 (self-annealing, per the log below):** a full review found
+and fixed an auth fail-open in four edge functions, a rubber-stamped amount gate + anonymous
+review-write + count inflation in SQL (→ migration 009, staged), the unenforced
+no-contact-data-to-Gemini rule, an LLM-reachable SQL-guard bypass, and a class of silent
+worker data-loss bugs. **Deploy step for the user:** apply `009_hardening.sql` and deploy the
+six updated `supabase/functions/` sources in one window (see `memory/progress.md`).
 
 ## Repository map
 
@@ -61,8 +69,9 @@ every field below is real and verified:
   "backend_url": "https://<service> — FastAPI, Python host",
   "database": {
     "host": "Supabase Postgres (canonical source of truth)",
-    "migrations_applied": ["001_schema","002_borough_statewide","003_enable_rls","004_rest_rpc_api"],
-    "deals_loaded": "NEW_YORK_CLOSED_ENRICHED_v8.csv via scripts/migrate_csv.py",
+    "migrations_applied": ["001_schema","002_borough_statewide","003_enable_rls","004_rest_rpc_api","005_base44_sync","006_sync_dedupe_null_dates","007_b44_contact_harvest","008_broker_and_dos_writes"],
+    "migrations_staged": ["009_hardening — apply to prod with the edge-fn v2 deploy (D-011)"],
+    "deals_loaded": "NEW_YORK_CLOSED_ENRICHED_v8.csv via scripts/migrate_csv.py (4,533 live as of 2026-07-06)",
     "assertions": "scripts/assert_migration.py → ALL ASSERTIONS PASSED"
   },
   "health_checks": {

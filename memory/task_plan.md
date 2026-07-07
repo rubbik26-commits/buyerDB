@@ -43,3 +43,15 @@
 - [ ] Production transfer
 - [ ] Firing mechanism (cron/webhook/manual) documented in CLAUDE.md
 - [ ] Maintenance log finalized; self-annealing loop in effect
+
+## Phase M — Maintenance (2026-07-07) — full-system review/optimize/improve loop
+Branch `claude/system-debug-refactor-724uem`. Every tracked file read; verified findings fixed.
+- [x] Six-subsystem review (worker, backend, frontend, edge functions, SQL, infra/docs)
+- [x] Edge functions: fail-closed auth + shared `_shared/mod.ts` + honest failure reporting; `deno check` clean
+- [x] SQL: migration 009 (api_buyers fan-out, anon review-write revoke, sync gate/conflict/lock, api_deals notes) — STAGED, not applied (D-011); real 007/008 sources restored
+- [x] Worker: fetch-ledger blacklist, SoQL apostrophe, zero-price crash, party-conflict flagging, deterministic ordering, ledger-as-table; 27/27 tests
+- [x] Backend: Gemini deny-list enforced, run_readonly_sql bypasses closed, /buyers fan-out, uploads NaN/idempotency, review action validation, pool sizing, router non-ProviderError failover
+- [x] Frontend: NaN-filter, agent history roles, 5 fetch races, dead affordances removed, error-boundary, notes provenance surfaced
+- [x] Infra/docs: legacy crons gated (ENABLE_LEGACY_WORKER), workflow bugs, seed SQL hardened + idempotent, render healthcheck, probe robustness, stale docs synced to D-008/D-010, zip removed
+- [x] Verified end-to-end on a fresh Postgres 16: migrations 001–009 + CSV load → 13/13 assertions → 27/27 tests → frontend build → deno check
+- [ ] **User deploy step:** apply `009_hardening.sql` + deploy the six `supabase/functions/` v2 sources in one window; verify a sync run + Buyers tab
