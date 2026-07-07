@@ -2,34 +2,18 @@
 // into the Skyline Postgres tables (properties/entities/deals/deal_parties/contacts)
 // via the sync_upsert_deals() RPC, which enforces every Skyline invariant.
 // Scheduled by pg_cron after the nightly dealflow jobs. Auth: body.secret must
-// match app_config('sync_secret'); Base44 creds come from app_config, not source.
-// Deployed 2026-07-06 (v3) — this file mirrors production.
+// match app_config('sync_secret') — fail-closed; Base44 creds from app_config.
+// v4: shared plumbing (_shared/mod.ts), error boundary around the sync loop,
+// ok=false when nothing synced and errors occurred.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  authorized, canonicalizeAddress, json, loadConfig, newTotals, normalizeEntity,
+  serviceClient, upsertDeals,
+} from "../_shared/mod.ts";
 
-const supa = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-);
+const supa = serviceClient();
 const DEADLINE_MS = 140_000;
 
-const SUFFIX: Record<string, string> = { STREET: "ST", ST: "ST", STR: "ST", AVENUE: "AVE", AVE: "AVE", AV: "AVE", BOULEVARD: "BLVD", BLVD: "BLVD", ROAD: "RD", RD: "RD", DRIVE: "DR", DR: "DR", LANE: "LN", LN: "LN", COURT: "CT", CT: "CT", PLACE: "PL", PL: "PL", PLAZA: "PLZ", TERRACE: "TER", PARKWAY: "PKWY", HIGHWAY: "HWY", EXPRESSWAY: "EXPY", SQUARE: "SQ", CIRCLE: "CIR", TURNPIKE: "TPKE" };
-const DIR: Record<string, string> = { EAST: "E", WEST: "W", NORTH: "N", SOUTH: "S" };
-function canon(raw: unknown): string {
-  if (!raw || typeof raw !== "string") return "";
-  let a = raw.trim().toUpperCase().replace(/[.,;:()]/g, " ")
-    .replace(/\s+\d{5}(-\d{4})?$/, "")
-    .replace(/\s+(NY|NYC|NEW YORK|MANHATTAN|BROOKLYN|QUEENS|BRONX|STATEN ISLAND)$/g, "")
-    .replace(/\s+/g, " ").trim();
-  if (!a) return "";
-  return a.split(" ").map((t) => DIR[t] || SUFFIX[t] || t).join(" ").trim();
-}
-function normEnt(name: unknown): string | null {
-  if (!name || typeof name !== "string" || !name.trim()) return null;
-  return name.trim().toUpperCase()
-    .replace(/L\.L\.C\.|LLC/gi, "LLC").replace(/INC\.|INCORPORATED|INC/gi, "INC")
-    .replace(/\s+/g, " ").trim() || null;
-}
 function mapSource(src: unknown): string {
   const s = String(src || "").toLowerCase();
   if (s.includes("acris")) return "acris";
@@ -52,7 +36,7 @@ function slim(r: Record<string, unknown>) {
   return {
     shortcode: r.shortcode || null,
     address: addr,
-    address_norm: (r.normalized_address as string) || canon(addr) || null,
+    address_norm: (r.normalized_address as string) || canonicalizeAddress(addr) || null,
     borough: r.borough || null,
     market: r.market || null,
     asset_type: r.asset_type || null,
@@ -68,15 +52,11 @@ function slim(r: Record<string, unknown>) {
     notes: r.notes || null,
     bbl: r.bbl || null,
     buyer: r.buyer || null,
-    buyer_norm: (r.normalized_buyer as string) || normEnt(r.buyer),
+    buyer_norm: (r.normalized_buyer as string) || normalizeEntity(r.buyer),
     seller: r.seller || null,
-    seller_norm: (r.normalized_seller as string) || normEnt(r.seller),
+    seller_norm: (r.normalized_seller as string) || normalizeEntity(r.seller),
     buyer_address: r.buyer_address || null,
     seller_address: r.seller_address || null,
-    buyer_phone: r.buyer_phone || null,
-    buyer_email: r.buyer_email || null,
-    seller_phone: r.seller_phone || null,
-    seller_email: r.seller_email || null,
   };
 }
 
@@ -85,40 +65,43 @@ Deno.serve(async (req: Request) => {
   let body: Record<string, unknown> = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
-  const { data: cfg, error: cfgErr } = await supa.from("app_config")
-    .select("key,value").in("key", ["base44_app_id", "base44_api_key", "sync_secret"]);
-  if (cfgErr) return new Response(JSON.stringify({ ok: false, error: "config: " + cfgErr.message }), { status: 500, headers: { "Content-Type": "application/json" } });
-  const conf = Object.fromEntries((cfg ?? []).map((r) => [r.key, r.value]));
-  if (body.secret !== conf.sync_secret) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+  let conf: Record<string, string>;
+  try {
+    conf = await loadConfig(supa, ["base44_app_id", "base44_api_key", "sync_secret"]);
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
   }
+  if (!authorized(body.secret, conf.sync_secret)) return json({ error: "unauthorized" }, 401);
 
   const B44 = `https://app.base44.com/api/apps/${conf.base44_app_id}/entities/Deal`;
   const limit = typeof body.limit === "number" ? body.limit : Number.POSITIVE_INFINITY;
   let fetched = 0;
-  const totals: Record<string, number> = { inserted: 0, dup: 0, skipped_residential: 0, skipped_invalid: 0, parties: 0, contacts: 0, errors: 0 };
+  const totals = newTotals();
   const errSamples: string[] = [];
   let hitDeadline = false;
 
-  for (let page = 0; page < 60; page++) {
-    if (Date.now() - start > DEADLINE_MS) { hitDeadline = true; break; }
-    const res = await fetch(`${B44}?limit=500&skip=${page * 500}`, { headers: { api_key: conf.base44_api_key as string } });
-    if (!res.ok) { errSamples.push(`base44 fetch ${res.status}`); break; }
-    const rows = await res.json();
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    const payload = rows.slice(0, Math.max(0, limit - fetched)).map(slim);
-    fetched += payload.length;
-    const { data, error } = await supa.rpc("sync_upsert_deals", { rows: payload });
-    if (error) { totals.errors += payload.length; if (errSamples.length < 5) errSamples.push("rpc: " + error.message); }
-    else if (data) {
-      for (const k of Object.keys(totals)) totals[k] += Number(data[k] ?? 0);
-      for (const s of (data.error_samples ?? [])) if (errSamples.length < 5) errSamples.push(String(s));
+  try {
+    for (let page = 0; page < 60 && fetched < limit; page++) {
+      if (Date.now() - start > DEADLINE_MS) { hitDeadline = true; break; }
+      const res = await fetch(`${B44}?limit=500&skip=${page * 500}`, { headers: { api_key: conf.base44_api_key } });
+      if (!res.ok) { errSamples.push(`base44 fetch ${res.status}`); break; }
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      const payload = rows.slice(0, Math.max(0, limit - fetched)).map(slim);
+      fetched += payload.length;
+      await upsertDeals(supa, payload, totals, errSamples);
+      if (rows.length < 500) break;
     }
-    if (rows.length < 500 || fetched >= limit) break;
+  } catch (e) {
+    if (errSamples.length < 5) errSamples.push("sync loop: " + String(e));
   }
 
-  const summary = { ok: true, fetched, ...totals, error_samples: errSamples, hit_deadline: hitDeadline, elapsed_ms: Date.now() - start, at: new Date().toISOString() };
-  await supa.from("sync_state").upsert({ key: "base44_deals", value: summary, updated_at: new Date().toISOString() });
+  // A run that fetched nothing and hit errors is a failure, not a green no-op.
+  const ok = errSamples.length === 0 || fetched > 0;
+  const summary = { ok, fetched, ...totals, error_samples: errSamples, hit_deadline: hitDeadline, elapsed_ms: Date.now() - start, at: new Date().toISOString() };
+  const { error: stateErr } = await supa.from("sync_state")
+    .upsert({ key: "base44_deals", value: summary, updated_at: new Date().toISOString() });
+  if (stateErr) console.log("skyline-sync: sync_state write failed:", stateErr.message);
   console.log("skyline-sync:", JSON.stringify(summary));
-  return new Response(JSON.stringify(summary), { headers: { "Content-Type": "application/json" } });
+  return json(summary);
 });

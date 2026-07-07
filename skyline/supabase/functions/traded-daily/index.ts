@@ -1,10 +1,17 @@
 // traded-daily (Supabase-native rewrite, 2026-07-06): traded.co discovery via
 // ScraperAPI -> Skyline Postgres via sync_upsert_deals(). Base44 removed.
 // Secrets from app_config. body.maxFetches caps ScraperAPI spend per run.
+// v2: shared plumbing; fails fast on a missing ScraperAPI key (a 0-credit or
+// unset key used to return ok:true with 0 deals forever); fetch failures are
+// counted; sale_date comes only from genuine closing-date fields; parties
+// parsed out of the headline can never mark a row parse_status 'ok'.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  authorized, canonicalizeAddress, json, loadConfig, newTotals, normalizeEntity,
+  serviceClient, upsertDeals,
+} from "../_shared/mod.ts";
 
-const supa = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+const supa = serviceClient();
 const LISTINGS = [
   "https://traded.co/deals/new-york/multifamily/sale/", "https://traded.co/deals/new-york/office/sale/",
   "https://traded.co/deals/new-york/retail/sale/", "https://traded.co/deals/new-york/industrial/sale/",
@@ -16,18 +23,24 @@ const LISTINGS = [
 const SITEMAP_INDEX = "https://traded.co/sitemap.xml";
 const DEADLINE_MS = 125_000;
 const CONCURRENCY = 5;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-let SCRAPERAPI_KEY = "";
-async function scraperFetch(url: string): Promise<string> {
-  const api = `https://api.scraperapi.com/?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(url)}&country_code=us`;
-  const res = await fetch(api, { headers: { Accept: "text/html,*/*" } });
-  if (!res.ok) throw new Error(`scraperapi ${res.status} for ${url}`);
-  return await res.text();
+function makeScraperFetch(apiKey: string) {
+  return async (url: string): Promise<string> => {
+    const api = `https://api.scraperapi.com/?api_key=${apiKey}&url=${encodeURIComponent(url)}&country_code=us`;
+    const res = await fetch(api, { headers: { Accept: "text/html,*/*" } });
+    if (!res.ok) throw new Error(`scraperapi ${res.status} for ${url}`);
+    return await res.text();
+  };
 }
-async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>, failures?: { count: number; samples: string[] }): Promise<R[]> {
   const out: R[] = []; let i = 0;
-  async function worker() { while (i < items.length) { const idx = i++; try { out[idx] = await fn(items[idx]); } catch { /* skip */ } } }
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      try { out[idx] = await fn(items[idx]); }
+      catch (e) { if (failures) { failures.count++; if (failures.samples.length < 3) failures.samples.push(String(e)); } }
+    }
+  }
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
   return out.filter((x) => x !== undefined);
 }
@@ -60,14 +73,14 @@ function extractListingDealUrls(html: string): string[] {
   })(json);
   return [...urls];
 }
-async function discoverAllDealUrls(): Promise<string[]> {
+async function discoverAllDealUrls(scraperFetch: (u: string) => Promise<string>, failures: { count: number; samples: string[] }): Promise<string[]> {
   const urls = new Set<string>();
-  const listingHtmls = await pool(LISTINGS, CONCURRENCY, scraperFetch);
+  const listingHtmls = await pool(LISTINGS, CONCURRENCY, scraperFetch, failures);
   for (const html of listingHtmls) for (const u of extractListingDealUrls(html)) urls.add(u);
   try {
     const idx = await scraperFetch(SITEMAP_INDEX);
     const subs = [...idx.matchAll(/<loc>([^<]+\.xml)<\/loc>/g)].map((m) => m[1]);
-    const subXmls = await pool(subs, CONCURRENCY, scraperFetch);
+    const subXmls = await pool(subs, CONCURRENCY, scraperFetch, failures);
     for (const xml of subXmls) for (const m of xml.matchAll(/<loc>(https:\/\/traded\.co\/deals\/new-york\/[a-z-]+\/sale\/[^<]+)<\/loc>/g)) {
       const n = normalizeTradedDealUrl(m[1]); if (n) urls.add(n);
     }
@@ -100,10 +113,6 @@ const BORO_RE: Array<[RegExp, string]> = [[/\bstaten island\b/i, "Staten Island"
 const NEIGH: Array<[string, string]> = [["yorkville", "Manhattan"], ["harlem", "Manhattan"], ["tribeca", "Manhattan"], ["soho", "Manhattan"], ["chelsea", "Manhattan"], ["midtown", "Manhattan"], ["upper east side", "Manhattan"], ["upper west side", "Manhattan"], ["inwood", "Manhattan"], ["hudson yards", "Manhattan"], ["williamsburg", "Brooklyn"], ["bushwick", "Brooklyn"], ["dumbo", "Brooklyn"], ["park slope", "Brooklyn"], ["bed-stuy", "Brooklyn"], ["bedford-stuyvesant", "Brooklyn"], ["sunset park", "Brooklyn"], ["astoria", "Queens"], ["long island city", "Queens"], ["flushing", "Queens"], ["jamaica", "Queens"], ["sunnyside", "Queens"], ["mott haven", "Bronx"], ["fordham", "Bronx"], ["riverdale", "Bronx"]];
 function boroughFromText(text: string): string | null { const s = String(text || ""); for (const [re, b] of BORO_RE) if (re.test(s)) return b; const l = s.toLowerCase(); for (const [k, b] of NEIGH) if (l.includes(k)) return b; return null; }
 function cleanSaleDate(v: any): string | null { if (v == null) return null; const s = String(v).trim(); if (!s) return null; if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10); const d = new Date(s); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); }
-const SUFFIX_MAP: Record<string, string> = { STREET: "ST", ST: "ST", AVENUE: "AVE", AVE: "AVE", BOULEVARD: "BLVD", BLVD: "BLVD", ROAD: "RD", RD: "RD", DRIVE: "DR", DR: "DR", LANE: "LN", PLACE: "PL", PL: "PL", PARKWAY: "PKWY", SQUARE: "SQ", COURT: "CT", TERRACE: "TER" };
-const DIR_MAP: Record<string, string> = { EAST: "E", WEST: "W", NORTH: "N", SOUTH: "S" };
-function canonicalizeAddress(raw: string): string { if (!raw || typeof raw !== "string") return ""; let a = raw.trim().toUpperCase().replace(/[.,;:()]/g, " ").replace(/\s+(NY|NYC|NEW YORK|MANHATTAN|BROOKLYN|QUEENS|BRONX|STATEN ISLAND)$/g, "").replace(/\s+\d{5}(-\d{4})?$/, "").replace(/\s+/g, " ").trim(); if (!a) return ""; return a.split(" ").map((t) => DIR_MAP[t] || SUFFIX_MAP[t] || t).join(" ").trim(); }
-function normalizeEntity(name: any): string | null { if (!name || typeof name !== "string") return null; const n = name.trim().toUpperCase().replace(/L\.L\.C\.|LLC/gi, "LLC").replace(/INC\.|INCORPORATED|INC/gi, "INC").replace(/\s+/g, " ").trim(); return n || null; }
 function slugFromUrl(url: string): string { const seg = url.split("/").filter(Boolean).pop() || "deal"; return seg.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }
 
 function mapDealPage(deal: any, url: string): any {
@@ -116,9 +125,16 @@ function mapDealPage(deal: any, url: string): any {
   const borough = zipBorough(prop.zip) || boroughFromText([prop.submarket, title, address].filter(Boolean).join(" "));
   const price = Number(pickField(deal, ["salePrice", "sale_price", "amount", "price"]) || 0);
   const sqft = Number(pickField(deal, ["totalSquareFootageDeal", "squareFeet", "square_feet"]) || 0);
-  const saleDate = cleanSaleDate(pickField(deal, ["closingDate", "closing_date", "date", "publishedAt", "createdAt"]) || "");
-  const buyer = partyNameFrom(deal, "buyer") || parsed.buyer;
-  const seller = partyNameFrom(deal, "seller") || parsed.seller;
+  // Closing-date fields ONLY. publishedAt/createdAt are article timestamps; a
+  // deal written up months after closing would get a fabricated sale date.
+  const saleDate = cleanSaleDate(pickField(deal, ["closingDate", "closing_date"]) || "");
+  const structuredBuyer = partyNameFrom(deal, "buyer");
+  const structuredSeller = partyNameFrom(deal, "seller");
+  const buyer = structuredBuyer || parsed.buyer;
+  const seller = structuredSeller || parsed.seller;
+  // Headline-regex parties are a heuristic: they may carry a broker name or a
+  // truncated phrase. They never qualify a row as parse_status 'ok'.
+  const heuristicParty = (buyer && !structuredBuyer) || (seller && !structuredSeller);
   let confidence = 20; if (price > 0) confidence += 25; if (buyer) confidence += 20; if (seller) confidence += 15; if (saleDate) confidence += 10;
   return {
     shortcode: `TRADED-${slugFromUrl(url)}`,
@@ -130,7 +146,7 @@ function mapDealPage(deal: any, url: string): any {
     sale_date: saleDate, post_date: new Date().toISOString().slice(0, 10),
     source_system: "traded", source_url: url,
     confidence: Math.min(100, confidence),
-    parse_status: confidence >= 60 ? "ok" : "needs_review",
+    parse_status: confidence >= 60 && !heuristicParty ? "ok" : "needs_review",
     notes: `Auto-imported from traded.co via ScraperAPI. ${url}`, bbl: null,
     buyer: buyer || null, buyer_norm: normalizeEntity(buyer),
     seller: seller || null, seller_norm: normalizeEntity(seller),
@@ -138,48 +154,54 @@ function mapDealPage(deal: any, url: string): any {
   };
 }
 
-async function existingTradedShortcodes(): Promise<Set<string>> {
+async function existingTradedShortcodes(errSamples: string[]): Promise<Set<string>> {
   const seen = new Set<string>();
   for (let page = 0; page < 40; page++) {
     const { data, error } = await supa.from("deals").select("shortcode")
       .like("shortcode", "TRADED-%").range(page * 1000, page * 1000 + 999);
-    if (error || !data || data.length === 0) break;
+    if (error) { if (errSamples.length < 5) errSamples.push("shortcode scan: " + error.message); break; }
+    if (!data || data.length === 0) break;
     for (const r of data) if (r.shortcode) seen.add(r.shortcode);
     if (data.length < 1000) break;
   }
   return seen;
 }
 
-async function run(body: any) {
+async function run(body: any, scraperFetch: (u: string) => Promise<string>) {
   const start = Date.now();
   const overBudget = () => Date.now() - start > DEADLINE_MS;
   const maxFetches = Math.max(1, Math.min(70, Number(body.maxFetches) || 70));
-  const allUrls = await discoverAllDealUrls();
-  const existing = await existingTradedShortcodes();
+  const fetchFailures = { count: 0, samples: [] as string[] };
+  const errSamples: string[] = [];
+  const allUrls = await discoverAllDealUrls(scraperFetch, fetchFailures);
+  const existing = await existingTradedShortcodes(errSamples);
   const allFresh = allUrls.filter((u) => !existing.has(`TRADED-${slugFromUrl(u)}`));
   const batch = allFresh.slice(0, maxFetches);
 
   const deals: any[] = [];
-  await pool(batch, CONCURRENCY, async (u) => { if (overBudget()) return; const html = await scraperFetch(u); const deal = mapDealPage(findDealObject(parseNextData(html)), u); if (deal) deals.push(deal); });
+  await pool(batch, CONCURRENCY, async (u) => { if (overBudget()) return; const html = await scraperFetch(u); const deal = mapDealPage(findDealObject(parseNextData(html)), u); if (deal) deals.push(deal); }, fetchFailures);
 
-  const totals: Record<string, number> = { inserted: 0, dup: 0, skipped_residential: 0, skipped_invalid: 0, parties: 0, contacts: 0, errors: 0 };
-  const errSamples: string[] = [];
-  if (deals.length) {
-    const { data, error } = await supa.rpc("sync_upsert_deals", { rows: deals });
-    if (error) { totals.errors += deals.length; errSamples.push("rpc: " + error.message); }
-    else if (data) { for (const k of Object.keys(totals)) totals[k] += Number(data[k] ?? 0); for (const s of (data.error_samples ?? [])) if (errSamples.length < 5) errSamples.push(String(s)); }
-  }
+  const totals = newTotals();
+  if (deals.length) await upsertDeals(supa, deals, totals, errSamples);
+  for (const s of fetchFailures.samples) if (errSamples.length < 5) errSamples.push(s);
 
-  const summary = { ok: true, ran_at: new Date().toISOString(), deal_urls_found: allUrls.length, already_in_db: existing.size, total_fresh: allFresh.length, batch: batch.length, parsed: deals.length, ...totals, fresh_remaining: Math.max(0, allFresh.length - batch.length), error_samples: errSamples, elapsed_ms: Date.now() - start };
+  // Zero URLs found with fetch failures means the scrape never ran (bad key,
+  // exhausted credits) — that is a red run, not a quiet green one.
+  const ok = allUrls.length > 0 || fetchFailures.count === 0;
+  const summary = { ok, ran_at: new Date().toISOString(), deal_urls_found: allUrls.length, already_in_db: existing.size, total_fresh: allFresh.length, batch: batch.length, parsed: deals.length, fetch_failures: fetchFailures.count, ...totals, fresh_remaining: Math.max(0, allFresh.length - batch.length), error_samples: errSamples, elapsed_ms: Date.now() - start };
   console.log("traded-daily summary:", JSON.stringify(summary));
   return summary;
 }
 
 Deno.serve(async (req: Request) => {
-  const { data: cfg } = await supa.from("app_config").select("key,value").in("key", ["traded_secret", "scraperapi_key"]);
-  const conf = Object.fromEntries((cfg ?? []).map((r) => [r.key, r.value]));
-  if (req.headers.get("x-traded-secret") !== conf.traded_secret) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-  SCRAPERAPI_KEY = conf.scraperapi_key || "";
-  try { const body = await req.json().catch(() => ({})); return new Response(JSON.stringify(await run(body)), { headers: { "Content-Type": "application/json" } }); }
-  catch (e) { console.log("traded-daily fatal:", String(e)); return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+  let conf: Record<string, string>;
+  try {
+    conf = await loadConfig(supa, ["traded_secret", "scraperapi_key"]);
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+  if (!authorized(req.headers.get("x-traded-secret"), conf.traded_secret)) return json({ error: "unauthorized" }, 401);
+  const scraperFetch = makeScraperFetch(conf.scraperapi_key);
+  try { const body = await req.json().catch(() => ({})); return json(await run(body, scraperFetch)); }
+  catch (e) { console.log("traded-daily fatal:", String(e)); return json({ ok: false, error: String(e) }, 500); }
 });

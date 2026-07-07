@@ -1,9 +1,14 @@
 // acris-v2 (Supabase-native rewrite, 2026-07-06): ACRIS deed window -> Skyline
 // Postgres via sync_upsert_deals() RPC. Base44 removed. Secrets from app_config.
+// v2.1: shared plumbing (_shared/mod.ts), fail-closed auth, deadline checks in
+// the fetch/upsert phases, window-date validation, degradation counters.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  authorized, canonicalizeAddress, isPlaceholderOwner, json, loadConfig, newTotals,
+  normalizeEntity, serviceClient, upsertDeals,
+} from "../_shared/mod.ts";
 
-const supa = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+const supa = serviceClient();
 const ACRIS_BASE = "https://data.cityofnewyork.us/resource";
 const PLUTO_DATASET = "64uk-42ks";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36";
@@ -12,20 +17,15 @@ const PLUTO_IN_CHUNK = 100;
 const PRICE_FLOOR = 1_000_000;
 const MASTER_CAP = 4000;
 const DEADLINE_MS = 150_000;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const BOROUGH_MAP: Record<string, string> = { "1": "Manhattan", "2": "Bronx", "3": "Brooklyn", "4": "Queens", "5": "Staten Island" };
 const ACRIS_RESIDENTIAL_REJECT = new Set(["D1","D2","D3","D4","RG","RP","RV","SC","SP","MC","MP","SA","SM","CK","CA","BS","TS","MR","GR","PS","NA","PA"]);
 const ACRIS_COMMERCIAL_CONDO = new Set(["CC","CP"]);
 const DOF_REJECT_CODES = new Set(["C0","C3","C6","C8","D0","D4","DC"]);
 
-const PLACEHOLDER_OWNER = /^(unknown|n\/?a|not\s+specified|not\s+provided|not\s+disclosed|not\s+found|undisclosed|confidential|withheld|anonymous|private\s+investor|various|multiple|null|undefined|none|no\s+name|tbd|tba|-+|\*+)$/i;
-function isPlaceholderOwner(v: unknown): boolean { if (v == null || typeof v !== "string") return true; const t = v.trim(); if (!t) return true; return PLACEHOLDER_OWNER.test(t); }
-const SUFFIX_MAP: Record<string, string> = { STREET:"ST",ST:"ST",AVENUE:"AVE",AVE:"AVE",BOULEVARD:"BLVD",BLVD:"BLVD",ROAD:"RD",RD:"RD",DRIVE:"DR",DR:"DR",LANE:"LN",PLACE:"PL",PL:"PL",PARKWAY:"PKWY",SQUARE:"SQ",COURT:"CT",TERRACE:"TER" };
-const DIRECTION_MAP: Record<string, string> = { EAST:"E",WEST:"W",NORTH:"N",SOUTH:"S" };
-function canonicalizeAddress(raw: string): string { if(!raw||typeof raw!=="string")return""; let a=raw.trim().toUpperCase().replace(/[.,;:()]/g," ").replace(/\s+(NY|NYC|NEW YORK|MANHATTAN|BROOKLYN|QUEENS|BRONX|STATEN ISLAND)$/g,"").replace(/\s+\d{5}(-\d{4})?$/,"").replace(/\s+/g," ").trim(); if(!a)return""; return a.split(" ").map((t)=>DIRECTION_MAP[t]||SUFFIX_MAP[t]||t).join(" ").trim(); }
 const BAD_ADDRESS_PATTERN = /\b(portfolio|lease|leased|mortgage|loan|refi|refinance|financing|assignment|ucc)\b/i;
 function isBadAddress(a: string): boolean { if(!a)return true; const t=String(a).trim(); if(!t)return true; if(BAD_ADDRESS_PATTERN.test(t))return true; if(!/^\d+\s+/.test(t))return true; return false; }
-function normalizeEntity(name: string | null): string | null { if(!name||isPlaceholderOwner(name))return null; let n=String(name).trim().toUpperCase(); n=n.replace(/L\.L\.C\.|LLC/gi,"LLC").replace(/INC\.|INCORPORATED|INC/gi,"INC").replace(/\s+/g," "); return n.trim()||null; }
 function buildBbl(bc: string, block: string, lot: string): string { const b=String(bc??"").trim(); const blk=String(block??"").replace(/[^0-9]/g,""); const lt=String(lot??"").replace(/[^0-9]/g,""); if(!/^[1-5]$/.test(b)||!blk||!lt)return""; if(blk.length>5||lt.length>4)return""; return`${b}${blk.padStart(5,"0")}${lt.padStart(4,"0")}`; }
 const acrisSourceUrl = (doc: string) => `https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=${doc}`;
 
@@ -78,7 +78,7 @@ async function soqlFetchAll(endpoint: string, where: string, orderBy: string, pa
     const rows = await soqlFetch(ACRIS_BASE, endpoint, p); if (!Array.isArray(rows) || rows.length === 0) break; all.push(...rows); if (rows.length < pageSize || all.length >= cap) break; offset += rows.length; }
   return all;
 }
-async function fetchPlutoForBbls(bbls: string[]): Promise<Record<string, any>> {
+async function fetchPlutoForBbls(bbls: string[], onChunkFail: () => void): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   const uniq = [...new Set(bbls.filter(Boolean))];
   for (let i = 0; i < uniq.length; i += PLUTO_IN_CHUNK) {
@@ -86,7 +86,7 @@ async function fetchPlutoForBbls(bbls: string[]): Promise<Record<string, any>> {
     const inClause = chunk.map((b) => `'${b}'`).join(",");
     const p = new URLSearchParams({ $select: "bbl,bldgclass,landuse,unitstotal,bldgarea,lotarea,numfloors,yearbuilt,ownername", $where: `bbl in (${inClause})`, $limit: "5000" });
     try { const rows = await soqlFetch(ACRIS_BASE, PLUTO_DATASET, p); for (const r of rows) { const key = String(parseInt(String(r.bbl), 10)); out[key] = r; } }
-    catch (e) { console.log("pluto chunk failed:", String(e)); }
+    catch (e) { onChunkFail(); console.log("pluto chunk failed:", String(e)); }
   }
   return out;
 }
@@ -96,9 +96,10 @@ async function run(sinceISO: string, untilISO: string | null) {
   const where = `doc_type IN ('DEED','DEEDO','DEEDP') AND document_amt >= ${PRICE_FLOOR} AND recorded_datetime >= '${sinceISO}T00:00:00.000'${untilISO ? ` AND recorded_datetime < '${untilISO}T00:00:00.000'` : ""}`;
   const masters = await soqlFetchAll("bnx9-e6tj", where, "recorded_datetime DESC", 1000, MASTER_CAP);
   const docIds = masters.map((m) => m.document_id);
+  let hitDeadline = false;
 
   const parties: Record<string, any> = {};
-  for (let i = 0; i < docIds.length; i += ACRIS_IN_CHUNK) {
+  for (let i = 0; i < docIds.length && !overBudget(); i += ACRIS_IN_CHUNK) {
     const chunk = docIds.slice(i, i + ACRIS_IN_CHUNK);
     const rows = await soqlFetchAll("636b-3b5g", `document_id IN (${chunk.map((id) => `'${id}'`).join(",")})`, "document_id ASC");
     for (const r of rows) { if (!parties[r.document_id]) parties[r.document_id] = {}; const addr = [r.address_1, r.address_2, r.city, r.state, r.zip].filter(Boolean).join(", ");
@@ -106,20 +107,21 @@ async function run(sinceISO: string, untilISO: string | null) {
       else if (r.party_type === "2") { if (!parties[r.document_id].buyer) { parties[r.document_id].buyer = r.name; parties[r.document_id].buyer_address = addr || null; } } }
   }
   const legals: Record<string, any> = {};
-  for (let i = 0; i < docIds.length; i += ACRIS_IN_CHUNK) {
+  for (let i = 0; i < docIds.length && !overBudget(); i += ACRIS_IN_CHUNK) {
     const chunk = docIds.slice(i, i + ACRIS_IN_CHUNK);
     const rows = await soqlFetchAll("8h5j-fqxa", `document_id IN (${chunk.map((id) => `'${id}'`).join(",")})`, "document_id ASC");
     for (const r of rows) { if (!legals[r.document_id]) legals[r.document_id] = { street_number: r.street_number, street_name: r.street_name, borough_code: r.borough, block: r.block, lot: r.lot, property_type: r.property_type }; }
   }
   const bblByDoc: Record<string, string> = {};
   for (const doc of docIds) { const lg = legals[doc]; if (lg) { const bbl = buildBbl(lg.borough_code, lg.block, lg.lot); if (bbl) bblByDoc[doc] = bbl; } }
-  const pluto = await fetchPlutoForBbls(Object.values(bblByDoc));
+  let plutoChunksFailed = 0;
+  const pluto = await fetchPlutoForBbls(Object.values(bblByDoc), () => plutoChunksFailed++);
 
-  let rejected_residential = 0, qualified = 0;
+  let rejected_residential = 0, qualified = 0, skipped_bad_address = 0;
   const assetCounts: Record<string, number> = {};
   const payload: any[] = [];
   for (const master of masters) {
-    if (overBudget()) break;
+    if (overBudget()) { hitDeadline = true; break; }
     const doc = master.document_id; const legal = legals[doc]; const party = parties[doc];
     if (!legal) continue;
     const salePrice = parseFloat(master.document_amt) || 0;
@@ -142,7 +144,7 @@ async function run(sinceISO: string, untilISO: string | null) {
     const boroughName = BOROUGH_MAP[legal.borough_code] || BOROUGH_MAP[master.recorded_borough] || null;
     const address = [streetNumber, streetName, boroughName, "NY"].filter(Boolean).join(" ");
     const normalized = canonicalizeAddress(address);
-    if (isBadAddress(address) || isBadAddress(normalized)) continue;
+    if (isBadAddress(address) || isBadAddress(normalized)) { skipped_bad_address++; continue; }
 
     const buyerName = party?.buyer && !isPlaceholderOwner(party.buyer) ? party.buyer : null;
     const sellerName = party?.seller && !isPlaceholderOwner(party.seller) ? party.seller : null;
@@ -171,27 +173,34 @@ async function run(sinceISO: string, untilISO: string | null) {
     });
   }
 
-  const totals: Record<string, number> = { inserted: 0, dup: 0, skipped_residential: 0, skipped_invalid: 0, parties: 0, contacts: 0, errors: 0 };
+  const totals = newTotals();
   const errSamples: string[] = [];
-  for (let i = 0; i < payload.length; i += 500) {
-    const { data, error } = await supa.rpc("sync_upsert_deals", { rows: payload.slice(i, i + 500) });
-    if (error) { totals.errors += Math.min(500, payload.length - i); if (errSamples.length < 5) errSamples.push("rpc: " + error.message); }
-    else if (data) { for (const k of Object.keys(totals)) totals[k] += Number(data[k] ?? 0); for (const s of (data.error_samples ?? [])) if (errSamples.length < 5) errSamples.push(String(s)); }
-  }
+  await upsertDeals(supa, payload, totals, errSamples, 500, () => {
+    if (overBudget()) { hitDeadline = true; return true; }
+    return false;
+  });
 
-  const summary = { ok: true, window_since: sinceISO, window_until: untilISO, masters: masters.length, qualified, rejected_residential_prefilter: rejected_residential, ...totals, asset_breakdown: assetCounts, error_samples: errSamples, elapsed_ms: Date.now() - start };
+  const summary = { ok: true, window_since: sinceISO, window_until: untilISO, masters: masters.length, qualified, rejected_residential_prefilter: rejected_residential, skipped_bad_address, pluto_chunks_failed: plutoChunksFailed, hit_deadline: hitDeadline, ...totals, asset_breakdown: assetCounts, error_samples: errSamples, elapsed_ms: Date.now() - start };
   console.log("acris-v2 summary:", JSON.stringify(summary));
   return summary;
 }
 
 Deno.serve(async (req: Request) => {
-  const { data: cfg } = await supa.from("app_config").select("key,value").in("key", ["dealflow_secret"]);
-  const secret = (cfg ?? []).find((r) => r.key === "dealflow_secret")?.value;
-  if (req.headers.get("x-acris-secret") !== secret) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+  let conf: Record<string, string>;
+  try {
+    conf = await loadConfig(supa, ["dealflow_secret"]);
+  } catch (e) {
+    return json({ ok: false, error: String(e) }, 500);
+  }
+  if (!authorized(req.headers.get("x-acris-secret"), conf.dealflow_secret)) return json({ error: "unauthorized" }, 401);
   try {
     const body = await req.json().catch(() => ({}));
     const since = body.since || new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
     const until = body.until || null;
-    return new Response(JSON.stringify(await run(since, until)), { headers: { "Content-Type": "application/json" } });
-  } catch (e) { console.log("acris-v2 fatal:", String(e)); return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+    // These are interpolated into SoQL — accept strict ISO days only.
+    if (!ISO_DAY.test(String(since)) || (until && !ISO_DAY.test(String(until)))) {
+      return json({ ok: false, error: "since/until must be YYYY-MM-DD" }, 400);
+    }
+    return json(await run(since, until));
+  } catch (e) { console.log("acris-v2 fatal:", String(e)); return json({ ok: false, error: String(e) }, 500); }
 });
