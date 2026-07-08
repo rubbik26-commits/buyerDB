@@ -1,16 +1,18 @@
 -- 010_workflow_rpc_api.sql
 -- Supabase-native workflow implementation for the static Netlify app.
--- This removes the RPC-mode "backend required" gap for Workbench, Properties,
--- Tasks, interaction logging, scraper requests, and CSV contact uploads.
+-- Implements the broker workflow tabs without requiring the optional FastAPI backend.
 
 BEGIN;
 
 CREATE OR REPLACE FUNCTION api_workbench()
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   WITH buyer_rollup AS (
-    SELECT e.entity_id, e.display_name AS name, count(*) AS deal_count,
-           coalesce(sum(d.sale_price), 0) AS volume, max(d.sale_date) AS last_deal,
-           count(c.contact_id) AS contact_count
+    SELECT e.entity_id,
+           e.display_name AS name,
+           count(DISTINCT d.deal_id) AS deal_count,
+           coalesce(sum(DISTINCT d.sale_price), 0) AS volume,
+           max(d.sale_date) AS last_deal,
+           count(DISTINCT c.contact_id) AS contact_count
     FROM deal_parties dp
     JOIN entities e USING (entity_id)
     JOIN deals d USING (deal_id)
@@ -29,12 +31,14 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
       SELECT e.entity_id, e.display_name
       FROM deal_parties dp JOIN entities e USING (entity_id)
       WHERE dp.deal_id = d.deal_id AND dp.role = 'buyer'
+      ORDER BY dp.created_at ASC
       LIMIT 1
     ) b ON true
     LEFT JOIN LATERAL (
       SELECT e.display_name
       FROM deal_parties dp JOIN entities e USING (entity_id)
       WHERE dp.deal_id = d.deal_id AND dp.role = 'seller'
+      ORDER BY dp.created_at ASC
       LIMIT 1
     ) s ON true
     ORDER BY d.property_id, d.sale_date DESC NULLS LAST, d.created_at DESC
@@ -96,12 +100,16 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
     LEFT JOIN LATERAL (
       SELECT e.entity_id, e.display_name
       FROM deal_parties dp JOIN entities e USING (entity_id)
-      WHERE dp.deal_id=d.deal_id AND dp.role='buyer' LIMIT 1
+      WHERE dp.deal_id=d.deal_id AND dp.role='buyer'
+      ORDER BY dp.created_at ASC
+      LIMIT 1
     ) b ON true
     LEFT JOIN LATERAL (
       SELECT e.entity_id, e.display_name
       FROM deal_parties dp JOIN entities e USING (entity_id)
-      WHERE dp.deal_id=d.deal_id AND dp.role='seller' LIMIT 1
+      WHERE dp.deal_id=d.deal_id AND dp.role='seller'
+      ORDER BY dp.created_at ASC
+      LIMIT 1
     ) s ON true
     ORDER BY d.property_id, d.sale_date DESC NULLS LAST, d.created_at DESC
   ), f AS (
@@ -138,7 +146,7 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
            CASE WHEN coalesce(sum(d.sale_price),0) >= 25000000 THEN 'high' ELSE 'normal' END AS priority,
            e.entity_id, NULL::uuid AS review_id,
            'Find phone/email for ' || e.display_name AS title,
-           count(*)::text || ' buyer deals · last deal ' || coalesce(max(d.sale_date)::text, 'unknown') AS detail,
+           count(DISTINCT d.deal_id)::text || ' buyer deals · last deal ' || coalesce(max(d.sale_date)::text, 'unknown') AS detail,
            coalesce(sum(d.sale_price),0) AS metric,
            max(d.sale_date)::timestamptz AS sort_time
     FROM deal_parties dp
@@ -147,7 +155,7 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
     LEFT JOIN contacts c ON c.entity_id=e.entity_id
     WHERE dp.role='buyer'
     GROUP BY e.entity_id, e.display_name
-    HAVING count(*) >= 2 AND count(c.contact_id)=0
+    HAVING count(DISTINCT d.deal_id) >= 2 AND count(DISTINCT c.contact_id)=0
   ), review_tasks AS (
     SELECT 'review'::text AS kind, coalesce(severity,'normal') AS priority,
            NULL::uuid AS entity_id, review_id,
@@ -172,12 +180,12 @@ CREATE OR REPLACE FUNCTION api_log_interaction(
   entity_id uuid, channel text DEFAULT 'other', subject text DEFAULT NULL,
   notes text DEFAULT NULL, outcome text DEFAULT NULL, user_id text DEFAULT 'broker')
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public AS $$
-DECLARE iid uuid;
+DECLARE iid uuid; safe_channel text;
 BEGIN
+  safe_channel := CASE WHEN api_log_interaction.channel IN ('call','email','text','meeting','mail','other') THEN api_log_interaction.channel ELSE 'other' END;
   INSERT INTO interactions(entity_id, user_id, channel, occurred_at, subject, notes, outcome)
   VALUES (api_log_interaction.entity_id, coalesce(api_log_interaction.user_id,'broker'),
-          coalesce(nullif(api_log_interaction.channel,''),'other'), now(),
-          api_log_interaction.subject, api_log_interaction.notes, api_log_interaction.outcome)
+          safe_channel, now(), api_log_interaction.subject, api_log_interaction.notes, api_log_interaction.outcome)
   RETURNING interaction_id INTO iid;
   RETURN jsonb_build_object('interaction_id', iid, 'status', 'logged');
 END;
@@ -196,13 +204,13 @@ CREATE OR REPLACE FUNCTION api_request_scrape(job text, user_id text DEFAULT 'br
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public AS $$
 DECLARE rid uuid;
 BEGIN
-  IF job NOT IN ('traded_refresh','acris_refresh','crexi_refresh','property_owner_refresh','full_refresh') THEN
+  IF api_request_scrape.job NOT IN ('traded_refresh','acris_refresh','crexi_refresh','property_owner_refresh','full_refresh') THEN
     RETURN jsonb_build_object('error','Unsupported scraper job');
   END IF;
   INSERT INTO scrape_runs(job, status, stats)
-  VALUES (job, 'requested', jsonb_build_object('requested_by', coalesce(user_id,'broker'), 'options', coalesce(options,'{}'::jsonb)))
+  VALUES (api_request_scrape.job, 'requested', jsonb_build_object('requested_by', coalesce(api_request_scrape.user_id,'broker'), 'options', coalesce(api_request_scrape.options,'{}'::jsonb)))
   RETURNING run_id INTO rid;
-  RETURN jsonb_build_object('run_id', rid, 'job', job, 'status', 'requested');
+  RETURN jsonb_build_object('run_id', rid, 'job', api_request_scrape.job, 'status', 'requested');
 END;
 $$;
 
@@ -213,15 +221,16 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = publi
 DECLARE uid uuid; idx int := 0; item jsonb;
 BEGIN
   INSERT INTO uploads(user_id, filename, row_count, column_mapping, status)
-  VALUES (coalesce(user_id,'broker'), filename, jsonb_array_length(coalesce(rows,'[]'::jsonb)), mapping, 'staged')
+  VALUES (coalesce(api_upload_stage.user_id,'broker'), api_upload_stage.filename,
+          jsonb_array_length(coalesce(api_upload_stage.rows,'[]'::jsonb)), api_upload_stage.mapping, 'staged')
   RETURNING upload_id INTO uid;
-  FOR item IN SELECT * FROM jsonb_array_elements(coalesce(rows,'[]'::jsonb)) LOOP
+  FOR item IN SELECT * FROM jsonb_array_elements(coalesce(api_upload_stage.rows,'[]'::jsonb)) LOOP
     INSERT INTO upload_rows(upload_id, row_num, raw) VALUES (uid, idx, item);
     idx := idx + 1;
   END LOOP;
   RETURN jsonb_build_object(
-    'upload_id', uid, 'row_count', idx, 'columns', coalesce(columns,'[]'::jsonb),
-    'proposed_mapping', coalesce(mapping,'{}'::jsonb),
+    'upload_id', uid, 'row_count', idx, 'columns', coalesce(api_upload_stage.columns,'[]'::jsonb),
+    'proposed_mapping', coalesce(api_upload_stage.mapping,'{}'::jsonb),
     'sample', (SELECT coalesce(jsonb_agg(raw ORDER BY row_num), '[]'::jsonb) FROM upload_rows WHERE upload_id=uid AND row_num < 5)
   );
 END;
@@ -229,33 +238,33 @@ $$;
 
 CREATE OR REPLACE FUNCTION api_upload_resolve(upload_id uuid, mapping jsonb DEFAULT '{}'::jsonb, user_id text DEFAULT 'broker')
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public AS $$
-DECLARE r record; src_col text; canon text; entity_name text; person text; ph text; em text; mail text; ttl text; notes text; chan text; eid uuid; stats jsonb := '{"contacts_created":0,"interactions_created":0,"new_entity":0,"auto_matched":0,"needs_review":0,"skipped_no_name":0}'::jsonb;
+DECLARE r record; src_col text; canon text; entity_name text; person text; ph text; em text; mail text; ttl text; notes_val text; chan text; safe_chan text; eid uuid; normalized text; stats jsonb := '{"contacts_created":0,"interactions_created":0,"new_entity":0,"auto_matched":0,"needs_review":0,"skipped_no_name":0}'::jsonb;
 BEGIN
-  UPDATE uploads SET status='resolving', column_mapping=mapping WHERE uploads.upload_id=api_upload_resolve.upload_id;
+  UPDATE uploads SET status='resolving', column_mapping=api_upload_resolve.mapping WHERE uploads.upload_id=api_upload_resolve.upload_id;
   FOR r IN SELECT row_num, raw FROM upload_rows WHERE upload_rows.upload_id=api_upload_resolve.upload_id ORDER BY row_num LOOP
-    entity_name := NULL; person := NULL; ph := NULL; em := NULL; mail := NULL; ttl := NULL; notes := NULL; chan := NULL;
-    FOR src_col, canon IN SELECT key, value #>> '{}' FROM jsonb_each(mapping) LOOP
+    entity_name := NULL; person := NULL; ph := NULL; em := NULL; mail := NULL; ttl := NULL; notes_val := NULL; chan := NULL;
+    FOR src_col, canon IN SELECT key, value FROM jsonb_each_text(api_upload_resolve.mapping) LOOP
       IF canon='entity_name' THEN entity_name := r.raw->>src_col; END IF;
       IF canon='person_name' THEN person := r.raw->>src_col; END IF;
       IF canon='phone' THEN ph := r.raw->>src_col; END IF;
       IF canon='email' THEN em := r.raw->>src_col; END IF;
       IF canon='mailing_address' THEN mail := r.raw->>src_col; END IF;
       IF canon='title' THEN ttl := r.raw->>src_col; END IF;
-      IF canon='interaction_notes' THEN notes := r.raw->>src_col; END IF;
+      IF canon='interaction_notes' THEN notes_val := r.raw->>src_col; END IF;
       IF canon='channel' THEN chan := r.raw->>src_col; END IF;
     END LOOP;
+
     IF coalesce(trim(entity_name),'') = '' THEN
       stats := jsonb_set(stats, '{skipped_no_name}', to_jsonb((stats->>'skipped_no_name')::int + 1));
       UPDATE upload_rows SET status='rejected', resolution='{"reason":"missing entity_name"}'::jsonb WHERE upload_rows.upload_id=api_upload_resolve.upload_id AND row_num=r.row_num;
       CONTINUE;
     END IF;
 
-    SELECT e.entity_id INTO eid FROM entities e
-    WHERE e.norm_name = regexp_replace(upper(entity_name), '[^A-Z0-9]+', ' ', 'g')
-    LIMIT 1;
+    normalized := trim(regexp_replace(regexp_replace(upper(entity_name), '[^A-Z0-9]+', ' ', 'g'), '\s+', ' ', 'g'));
+    SELECT e.entity_id INTO eid FROM entities e WHERE e.norm_name = normalized LIMIT 1;
     IF eid IS NULL THEN
       INSERT INTO entities(display_name, norm_name, entity_type)
-      VALUES (entity_name, regexp_replace(upper(entity_name), '[^A-Z0-9]+', ' ', 'g'), 'unknown')
+      VALUES (entity_name, normalized, 'unknown')
       RETURNING entity_id INTO eid;
       stats := jsonb_set(stats, '{new_entity}', to_jsonb((stats->>'new_entity')::int + 1));
     ELSE
@@ -264,16 +273,20 @@ BEGIN
 
     IF coalesce(ph,'') <> '' OR coalesce(em,'') <> '' OR coalesce(person,'') <> '' OR coalesce(mail,'') <> '' THEN
       INSERT INTO contacts(entity_id, person_name, title, phone, email, mailing_address, source, created_by)
-      VALUES (eid, nullif(person,''), nullif(ttl,''), nullif(ph,''), nullif(em,''), nullif(mail,''), 'upload:' || api_upload_resolve.upload_id::text, coalesce(user_id,'broker'));
+      VALUES (eid, nullif(person,''), nullif(ttl,''), nullif(ph,''), nullif(em,''), nullif(mail,''), 'upload:' || api_upload_resolve.upload_id::text, coalesce(api_upload_resolve.user_id,'broker'));
       stats := jsonb_set(stats, '{contacts_created}', to_jsonb((stats->>'contacts_created')::int + 1));
     END IF;
-    IF coalesce(notes,'') <> '' THEN
+
+    IF coalesce(notes_val,'') <> '' THEN
+      safe_chan := CASE WHEN chan IN ('call','email','text','meeting','mail','other') THEN chan ELSE 'other' END;
       INSERT INTO interactions(entity_id, user_id, channel, occurred_at, subject, notes, outcome)
-      VALUES (eid, coalesce(user_id,'broker'), coalesce(nullif(chan,''),'other'), now(), 'Uploaded contact note', notes, 'uploaded');
+      VALUES (eid, coalesce(api_upload_resolve.user_id,'broker'), safe_chan, now(), 'Uploaded contact note', notes_val, 'uploaded');
       stats := jsonb_set(stats, '{interactions_created}', to_jsonb((stats->>'interactions_created')::int + 1));
     END IF;
+
     UPDATE upload_rows SET status='imported', resolution=jsonb_build_object('entity_id', eid) WHERE upload_rows.upload_id=api_upload_resolve.upload_id AND row_num=r.row_num;
   END LOOP;
+
   UPDATE uploads SET status='imported' WHERE uploads.upload_id=api_upload_resolve.upload_id;
   RETURN jsonb_build_object('upload_id', api_upload_resolve.upload_id, 'stats', stats);
 END;
