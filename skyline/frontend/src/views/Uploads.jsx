@@ -13,6 +13,8 @@ export default function Uploads({ refreshMeta }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
+  const hasEntityMapping = Object.values(mapping || {}).includes("entity_name");
+
   async function handleFile(file) {
     if (!file) return;
     if (IS_RPC_MODE && !/\.csv$/i.test(file.name)) {
@@ -35,6 +37,10 @@ export default function Uploads({ refreshMeta }) {
   }
 
   async function resolve() {
+    if (!hasEntityMapping) {
+      setErr(new Error("Choose one column to map to entity_name before importing."));
+      return;
+    }
     setBusy(true); setErr(null);
     try {
       const res = await api.resolveUpload({ upload_id: staged.upload_id, mapping, user_id: "broker" });
@@ -78,14 +84,14 @@ export default function Uploads({ refreshMeta }) {
 
       {stage === "map" && staged && (
         <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
             <div>
               <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>{staged.row_count} rows</strong>
               <span style={{ color: "var(--tx-dim)", marginLeft: 10, fontSize: 13 }}>confirm how columns map, then import</span>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn ghost" onClick={reset}>Cancel</button>
-              <button className="btn brass" onClick={resolve} disabled={busy}>{busy ? "Importing…" : "Resolve & import"}</button>
+              <button className="btn brass" onClick={resolve} disabled={busy || !hasEntityMapping}>{busy ? "Importing…" : "Resolve & import"}</button>
             </div>
           </div>
           <table className="maptable">
@@ -106,7 +112,7 @@ export default function Uploads({ refreshMeta }) {
               ))}
             </tbody>
           </table>
-          <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--tx-mute)" }}>
+          <div style={{ marginTop: 10, fontSize: 12.5, color: hasEntityMapping ? "var(--tx-mute)" : "var(--danger)" }}>
             An <code>entity_name</code> column is required — it links the contact to a buyer or seller.
           </div>
         </div>
@@ -114,7 +120,7 @@ export default function Uploads({ refreshMeta }) {
 
       {stage === "done" && result && (
         <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
             <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>Import complete</strong>
             <button className="btn brass" onClick={reset}>Upload another</button>
           </div>
