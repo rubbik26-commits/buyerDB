@@ -10,7 +10,7 @@ create or replace function api_review_act(
   user_id text default 'system'
 ) returns jsonb
 language plpgsql volatile security definer set search_path=public as $$
-declare payload jsonb; alias_raw text; alias_norm text;
+declare payload jsonb; alias_raw text;
 begin
   select r.payload into payload from sbi_review_queue r where r.review_id=api_review_act.review_id;
 
@@ -20,9 +20,8 @@ begin
     end if;
     alias_raw := coalesce(payload->>'name', payload->>'entity_name', payload->>'alias');
     if coalesce(trim(alias_raw),'') <> '' then
-      alias_norm := trim(regexp_replace(regexp_replace(upper(alias_raw),'[^A-Z0-9]+',' ','g'),'\s+',' ','g'));
-      insert into sbi_entity_aliases(entity_id, alias_raw, alias_norm, source)
-      values(api_review_act.entity_id, alias_raw, alias_norm, 'review_confirm')
+      insert into sbi_entity_aliases(entity_id, alias_raw, source)
+      values(api_review_act.entity_id, alias_raw, 'review_confirm')
       on conflict do nothing;
     end if;
     update sbi_review_queue
