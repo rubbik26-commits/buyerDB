@@ -6,14 +6,13 @@ const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 //    (migration 004), used while no backend host exists. Detected by the URL.
 const RPC_MODE = BASE.includes(".supabase.co");
 const SUPA = RPC_MODE ? new URL(BASE).origin : null;
-const ANON =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2c3Z4amR3ZmJzcWFxbG11d2x0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ1Mzc0NjAsImV4cCI6MjA5MDExMzQ2MH0.OLh3JihHms6aUxE3GR9OErpobj_0mIiewXTwxG-pP8M"; // public anon key (RLS enforced); safe in client bundles by design
+const ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
 const NEEDS_BACKEND =
   "This feature runs on the FastAPI backend, which is not deployed yet. " +
   "The data tabs are served directly from the database; deploy the backend " +
-  "(render.yaml in the repo) to enable uploads, entity merges, and the AI Deal Desk.";
+  "(render.yaml in the repo) to enable uploads, entity merges, AI Deal Desk, " +
+  "property owner workflows, scraper requests, and broker worklists.";
 
 // surface the response body on failure — PostgREST/FastAPI put the actual
 // reason there, and "HTTP 400" alone is undebuggable
@@ -24,6 +23,7 @@ async function fail(label, r) {
 }
 
 async function rpc(fn, args) {
+  if (!ANON) throw new Error("VITE_SUPABASE_ANON_KEY is required for Supabase RPC mode.");
   const r = await fetch(`${SUPA}/rest/v1/rpc/${fn}`, {
     method: "POST",
     headers: {
@@ -91,6 +91,12 @@ const legacy = {
   resolveUpload: (body) => post("/api/uploads/resolve", body),
   review: (params) => get("/api/review", params),
   reviewAct: (body) => post("/api/review/act", body),
+  workbench: () => get("/api/workbench"),
+  properties: (params) => get("/api/properties", params),
+  tasks: (params) => get("/api/tasks", params),
+  logInteraction: (body) => post("/api/interactions", body),
+  scraperRuns: (params) => get("/api/scrapers/runs", params),
+  requestScrape: (body) => post("/api/scrapers/request", body),
   async uploadFile(file, userId = "broker") {
     const fd = new FormData();
     fd.append("file", file);
@@ -103,6 +109,8 @@ const legacy = {
 
 const NUMERIC_DEAL_ARGS = ["price_min", "price_max", "units_min", "units_max",
   "sqft_min", "sqft_max", "ppsf_max", "confidence_min", "page", "per_page"];
+
+const rpcBackendRequired = async () => ({ error: NEEDS_BACKEND, hint: NEEDS_BACKEND });
 
 const rpcApi = {
   base: BASE,
@@ -141,6 +149,12 @@ const rpcApi = {
     if (res && res.error) throw new Error(res.error);
     return res;
   },
+  workbench: rpcBackendRequired,
+  properties: rpcBackendRequired,
+  tasks: rpcBackendRequired,
+  logInteraction: rpcBackendRequired,
+  scraperRuns: rpcBackendRequired,
+  requestScrape: rpcBackendRequired,
   uploadFile: async () => ({ error: NEEDS_BACKEND }),
 };
 
