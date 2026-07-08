@@ -201,8 +201,8 @@ table.deals td.num { text-align: right; font-family: var(--mono); font-variant-n
 }
 .pill.asset { background: var(--brass-glow); color: var(--brass-deep); border-color: rgba(156,122,46,0.25); }
 .pill.ok { background: rgba(60,125,89,0.12); color: var(--verified); border-color: rgba(60,125,89,0.25); }
-.pill.review { background: rgba(178,106,34,0.12); color: var(--review); border-color: rgba(178,106,34,0.28); }
-.pill.spv { background: rgba(162,59,46,0.1); color: var(--danger); border-color: rgba(162,59,46,0.25); }
+.pill.review { background: rgba(178,106,34,0.12); color: var(--review); border-color: rgba(178,106,34,0.25); }
+.pill.spv { background: rgba(162,59,46,0.10); color: var(--danger); border-color: rgba(162,59,46,0.24); }
 .pill.src { background: var(--paper-2); color: var(--tx-dim); border-color: var(--hair); }
 
 /* ── tombstones (signature) ────────────────────────────────────────── */

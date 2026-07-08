@@ -9,7 +9,7 @@
 #     to enable uploads, entity merges, and the AI Deal Desk.
 [build]
   base = "skyline/frontend"
-  command = "npm ci && npm run build"
+  command = "npm install && npm run build"
   publish = "dist"
 
 # Single-page app: serve index.html for every route.
@@ -24,8 +24,4 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    # Allowlist only what the app actually loads: Supabase (data), Google Fonts
-    # (stylesheet + font files). frame-ancestors backs up X-Frame-Options.
-    # NOTE: switching to backend mode requires adding the backend host to
-    # connect-src here.
     Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'"

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { api, num } from "../api/client.js";
+import { api, num, IS_RPC_MODE } from "../api/client.js";
 import { Loading, ErrorBanner } from "../components/ui.jsx";
 
 const FIELDS = ["", "entity_name", "person_name", "phone", "email", "mailing_address", "title", "last_contact_date", "interaction_notes", "channel"];
@@ -13,11 +13,16 @@ export default function Uploads({ refreshMeta }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
+  const hasEntityMapping = Object.values(mapping || {}).includes("entity_name");
+
   async function handleFile(file) {
     if (!file) return;
-    // drag-drop bypasses the input's accept filter — fail fast client-side
+    if (IS_RPC_MODE && !/\.csv$/i.test(file.name)) {
+      setErr(new Error(`Supabase RPC mode supports CSV contact imports. Excel imports require the optional FastAPI backend: ${file.name}`));
+      return;
+    }
     if (!/\.(csv|xlsx?|xls)$/i.test(file.name)) {
-      setErr(new Error(`Unsupported file type: ${file.name}. Use CSV or Excel.`));
+      setErr(new Error(`Unsupported file type: ${file.name}. Use CSV${IS_RPC_MODE ? "" : " or Excel"}.`));
       return;
     }
     setBusy(true); setErr(null);
@@ -32,11 +37,15 @@ export default function Uploads({ refreshMeta }) {
   }
 
   async function resolve() {
+    if (!hasEntityMapping) {
+      setErr(new Error("Choose one column to map to entity_name before importing."));
+      return;
+    }
     setBusy(true); setErr(null);
     try {
       const res = await api.resolveUpload({ upload_id: staged.upload_id, mapping, user_id: "broker" });
       if (res.error) throw new Error(res.error);
-      setResult({ ...res, stats: res.stats || {} }); // a stats-less response must not white-screen the tab
+      setResult({ ...res, stats: res.stats || {} });
       setStage("done");
       refreshMeta && refreshMeta();
     } catch (e) { setErr(e); }
@@ -50,7 +59,7 @@ export default function Uploads({ refreshMeta }) {
       <div className="view-head">
         <div className="eyebrow">Your book, linked to the market</div>
         <h1>Contacts</h1>
-        <p>Drop a CSV or Excel of owners, phones, emails, and call history. The desk normalizes each name, links it to the buyers and sellers already in the dataset, and holds anything ambiguous for your review — nothing is merged blindly.</p>
+        <p>Drop a CSV of owners, phones, emails, and call history. The desk normalizes each name, links it to the buyers and sellers already in the dataset, and holds anything ambiguous for your review — nothing is merged blindly.</p>
       </div>
 
       <ErrorBanner error={err} />
@@ -65,9 +74,9 @@ export default function Uploads({ refreshMeta }) {
             style={{ display: "block", cursor: "pointer" }}
           >
             <div className="big">Drop a contacts file here</div>
-            <div className="small">CSV or XLSX · columns like Owner, Phone, Email, Address, Last Contacted, Notes</div>
+            <div className="small">CSV{IS_RPC_MODE ? "" : " or XLSX"} · columns like Owner, Phone, Email, Address, Last Contacted, Notes</div>
             <div style={{ marginTop: 14 }}><span className="btn brass">Choose file</span></div>
-            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
+            <input type="file" accept={IS_RPC_MODE ? ".csv" : ".csv,.xlsx,.xls"} style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
           </label>
           {busy && <Loading label="Reading file…" />}
         </div>
@@ -75,14 +84,14 @@ export default function Uploads({ refreshMeta }) {
 
       {stage === "map" && staged && (
         <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
             <div>
               <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>{staged.row_count} rows</strong>
               <span style={{ color: "var(--tx-dim)", marginLeft: 10, fontSize: 13 }}>confirm how columns map, then import</span>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn ghost" onClick={reset}>Cancel</button>
-              <button className="btn brass" onClick={resolve} disabled={busy}>{busy ? "Importing…" : "Resolve & import"}</button>
+              <button className="btn brass" onClick={resolve} disabled={busy || !hasEntityMapping}>{busy ? "Importing…" : "Resolve & import"}</button>
             </div>
           </div>
           <table className="maptable">
@@ -103,15 +112,15 @@ export default function Uploads({ refreshMeta }) {
               ))}
             </tbody>
           </table>
-          <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--tx-mute)" }}>
-            An <code>entity_name</code> column is required — it's what links a contact to a buyer or seller.
+          <div style={{ marginTop: 10, fontSize: 12.5, color: hasEntityMapping ? "var(--tx-mute)" : "var(--danger)" }}>
+            An <code>entity_name</code> column is required — it links the contact to a buyer or seller.
           </div>
         </div>
       )}
 
       {stage === "done" && result && (
         <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
             <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>Import complete</strong>
             <button className="btn brass" onClick={reset}>Upload another</button>
           </div>
