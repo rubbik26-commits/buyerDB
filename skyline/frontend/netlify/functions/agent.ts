@@ -2,7 +2,7 @@ import type { Config, Context } from "@netlify/functions";
 
 type Message = { role: "system" | "user" | "assistant"; content: string };
 type ProviderResult = { text: string; provider: string; model: string };
-const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || process.env[name] || "";
+const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || (globalThis as any).process?.env?.[name] || "";
 
 const SYSTEM = `You are Skyline Buyer Intelligence OS, a NYC commercial real estate deal-intelligence assistant.
 
