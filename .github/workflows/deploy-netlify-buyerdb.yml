@@ -5,6 +5,7 @@ on:
   push:
     branches: [ACRIS]
     paths:
+      - "netlify.toml"
       - "skyline/frontend/**"
       - "skyline/database/migrations/**"
       - ".github/workflows/deploy-netlify-buyerdb.yml"
