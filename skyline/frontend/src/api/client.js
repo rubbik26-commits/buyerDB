@@ -1,209 +1,32 @@
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
-// Two transports, one api surface:
-//  * legacy mode — a FastAPI backend serving /api/* (localhost or Render/Railway)
-//  * rpc mode    — Supabase's PostgREST gateway calling the api_* SQL functions
-//    (migrations 004 and 010+), used while no backend host exists.
 const RPC_MODE = BASE.includes(".supabase.co");
 const SUPA = RPC_MODE ? new URL(BASE).origin : null;
 const ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
-async function fail(label, r) {
-  let detail = "";
-  try { detail = (await r.text()).slice(0, 300); } catch { /* body unreadable */ }
-  throw new Error(`${label} → HTTP ${r.status}${detail ? ` — ${detail}` : ""}`);
-}
+async function fail(label, r) { let detail = ""; try { detail = (await r.text()).slice(0, 300); } catch {} throw new Error(`${label} -> HTTP ${r.status}${detail ? ` - ${detail}` : ""}`); }
+async function rpc(fn, args) { if (!ANON) throw new Error("VITE_SUPABASE_ANON_KEY is required for Supabase RPC mode."); const r = await fetch(`${SUPA}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: ANON, Authorization: `Bearer ${ANON}`, "Content-Type": "application/json" }, body: JSON.stringify(args || {}) }); if (!r.ok) await fail(fn, r); return r.json(); }
+function clean(params, numeric = []) { const out = {}; Object.entries(params || {}).forEach(([k, v]) => { if (v === undefined || v === null || v === "") return; if (numeric.includes(k)) { const n = Number(String(v).replace(/[$,\s]/g, "")); if (!Number.isNaN(n)) out[k] = n; } else out[k] = v; }); return out; }
+async function get(path, params) { const url = new URL(BASE + path); if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v); }); const r = await fetch(url); if (!r.ok) await fail(path, r); return r.json(); }
+async function post(path, body) { const r = await fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!r.ok) await fail(path, r); return r.json(); }
 
-async function rpc(fn, args) {
-  if (!ANON) throw new Error("VITE_SUPABASE_ANON_KEY is required for Supabase RPC mode.");
-  const r = await fetch(`${SUPA}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers: { apikey: ANON, Authorization: `Bearer ${ANON}`, "Content-Type": "application/json" },
-    body: JSON.stringify(args || {}),
-  });
-  if (!r.ok) await fail(fn, r);
-  return r.json();
-}
+function parseCsv(text) { const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean); const split = (line) => { const out = []; let cur = ""; let q = false; for (let i = 0; i < line.length; i++) { const ch = line[i], next = line[i + 1]; if (q) { if (ch === '"' && next === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; } else if (ch === '"') q = true; else if (ch === ",") { out.push(cur); cur = ""; } else cur += ch; } out.push(cur); return out; }; const headers = split(lines.shift() || "").map((h) => h.trim()); return lines.map((line) => Object.fromEntries(split(line).map((v, i) => [headers[i], v ?? ""]))); }
+function sniffMapping(columns) { const aliases = { entity_name: ["owner", "entity", "company", "name", "buyer", "seller"], person_name: ["contact", "contact_name", "person", "principal"], phone: ["phone", "tel", "mobile", "cell"], email: ["email", "e-mail"], mailing_address: ["mailing", "mailing_address", "address"], title: ["title", "role"], interaction_notes: ["notes", "comments", "remarks"], channel: ["channel", "method"] }; const out = {}; for (const col of columns) { const key = String(col).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""); for (const [field, names] of Object.entries(aliases)) { if (key === field || names.includes(key)) { out[col] = field; break; } } } return out; }
+async function uploadCsvViaRpc(file, userId = "broker") { if (!file.name.toLowerCase().endsWith(".csv")) throw new Error("Supabase RPC mode supports CSV contact imports. Excel imports require the optional FastAPI backend."); const rows = parseCsv(await file.text()); const columns = rows[0] ? Object.keys(rows[0]) : []; const mapping = sniffMapping(columns); return rpc("api_upload_stage", { filename: file.name, user_id: userId, rows, columns, mapping }); }
 
-function clean(params, numeric = []) {
-  const out = {};
-  Object.entries(params || {}).forEach(([k, v]) => {
-    if (v === undefined || v === null || v === "") return;
-    if (numeric.includes(k)) {
-      const n = Number(String(v).replace(/[$,\s]/g, ""));
-      if (Number.isNaN(n)) return;
-      out[k] = n;
-    } else {
-      out[k] = v;
-    }
-  });
-  return out;
-}
+function inferAsset(question) { const q = question.toLowerCase(); if (q.includes("office")) return "Office"; if (q.includes("hotel")) return "Hotel"; if (q.includes("retail")) return "Retail"; if (q.includes("development") || q.includes("vacant") || q.includes("land")) return "Development Site"; if (q.includes("mixed")) return "Mixed Use"; if (q.includes("multifamily") || q.includes("multi family") || q.includes("apartment")) return "Multifamily"; return ""; }
+function inferBorough(question) { const q = question.toLowerCase(); if (q.includes("brooklyn")) return "Brooklyn"; if (q.includes("manhattan")) return "Manhattan"; if (q.includes("queens")) return "Queens"; if (q.includes("bronx")) return "Bronx"; if (q.includes("staten")) return "Staten Island"; return ""; }
+function cleanContactQuery(question) { return question.replace(/what'?s|what is|phone number|email|contact|for|owner|buyer|seller|who is|whats/gi, " ").replace(/[^a-z0-9 &.-]+/gi, " ").replace(/\s+/g, " ").trim(); }
+async function liveDealDesk(question) { const q = question.toLowerCase(); if (q.includes("phone") || q.includes("email") || q.includes("contact")) { const term = cleanContactQuery(question); const result = await rpc("api_contact_search", { q: term, lim: 10 }); const matches = result.matches || []; const lines = matches.flatMap((m) => (m.contacts || []).map((c) => `${m.name}: ${c.phone || "no phone"} - ${c.email || "no email"} - ${c.source || "source unknown"}`)); return { tool: "api_contact_search", arguments: { q: term, lim: 10 }, plan_why: "Contact request detected; searching contact rows only.", result, answer: lines.length ? lines.slice(0, 6).join("\n") : `No phone or email is on file for ${term || "that query"}.`, providers: { plan: "supabase-rpc", answer: "deterministic" } }; } if (q.includes("no contact") || q.includes("missing contact") || q.includes("contact gap")) { const result = await rpc("api_buyers", { min_deals: 2, lim: 50 }); const candidates = (result.buyers || []).filter((b) => !b.has_contact).slice(0, 10); return { tool: "api_buyers", arguments: { min_deals: 2, lim: 50 }, result: { entities_missing_contact: candidates }, answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} - ${num(b.n)} deals - ${money(b.vol, true)}`).join("\n") : "No active buyer contact gaps are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } }; } if (q.includes("best buyer") || q.includes("top buyer") || q.includes("active buyer") || q.includes("buyers")) { const args = { asset_type: inferAsset(question), borough: inferBorough(question), min_deals: 1, lim: 10 }; const result = await rpc("api_buyers", args); const candidates = result.buyers || []; return { tool: "api_buyers", arguments: args, result: { candidates }, answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} - ${num(b.n)} deals - ${money(b.vol, true)}${b.has_contact ? " - contact on file" : " - no contact on file"}`).join("\n") : "No matching buyers are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } }; } const term = question.replace(/recent|deals|transactions|show|for|about/gi, " ").replace(/\s+/g, " ").trim(); const result = await rpc("api_recent_deals", { q: term, lim: 10 }); const deals = result.deals || []; return { tool: "api_recent_deals", arguments: { q: term, lim: 10 }, result, answer: deals.length ? deals.map((d, i) => `${i + 1}. ${d.address || "Unknown address"} - ${d.asset_type || "asset"} - ${money(d.sale_price, true)} - buyer: ${d.buyer || "unknown"}`).join("\n") : "No matching transaction rows are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } }; }
 
-async function get(path, params) {
-  const url = new URL(BASE + path);
-  if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v); });
-  const r = await fetch(url);
-  if (!r.ok) await fail(path, r);
-  return r.json();
-}
+async function rpcAudit() { const [workbench, scraperRuns, uploads] = await Promise.all([rpc("api_workbench", {}), rpc("api_scraper_runs", { lim: 75 }), rpc("api_uploads_list", {})]); const s = workbench.stats || {}; return { totals: { properties: (workbench.owner_targets || []).length, deals: s.deals || 0, entities: (s.unique_buyers || 0) + (s.unique_sellers || 0), contacts: s.contacts || 0, open_reviews: s.open_reviews || 0, failed_scrapes: (scraperRuns.runs || []).filter((r) => ["failed", "timeout", "quota_blocked", "completed_with_errors"].includes(r.status)).length }, duplicate_properties: [], duplicate_deals: [], missing_parties: [], contact_gaps: workbench.contact_gaps || [], problem_runs: (scraperRuns.runs || []).filter((r) => ["running", "failed", "timeout", "quota_blocked", "completed_with_errors"].includes(r.status)), problem_uploads: (uploads.uploads || []).filter((u) => ["failed", "resolving", "staged"].includes(u.status)) }; }
+async function rpcOutreachTargets({ limit, require_email, ...rest } = {}) { const result = await rpc("api_buyers", { ...clean(rest, ["price_min", "price_max"]), lim: Number(limit || 75), min_deals: 1 }); const targets = (result.buyers || []).map((b) => ({ ...b, name: b.name, deal_count: b.n, volume: b.vol, email_count: b.has_contact ? 1 : 0, phone_count: b.has_contact ? 1 : 0 })).filter((b) => !require_email || b.email_count > 0); return { targets }; }
+async function rpcOutreachDraft({ entity_id, property_summary } = {}) { const d = await rpc("api_entity", { eid: entity_id }); const entity = d.entity || {}; const contacts = d.contacts || []; const recent = d.deals || []; const subject = "NYC investment sale opportunity"; const recentLine = recent.length ? ` I noticed your recent activity including ${recent.slice(0,3).map((r) => `${r.address} (${r.asset_type || "asset"}, ${money(r.sale_price, true)})`).join("; ")}.` : ""; const propertyLine = property_summary ? ` I am reaching out about ${property_summary}.` : " I am reaching out about a potential NYC investment sale opportunity."; const first = contacts[0]?.person_name ? contacts[0].person_name.split(" ")[0] : ""; const body = `${first ? `Hi ${first},` : "Hi,"}\n\n${propertyLine}${recentLine}\n\nGiven your transaction history, I thought this may be worth putting in front of you. If it is not a fit, no problem - I would still appreciate knowing what you are focused on right now.\n\nBest,\nRobert`; return { entity, contacts, recent_deals: recent, subject, body, draft: { status: "generated" } }; }
 
-async function post(path, body) {
-  const r = await fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) await fail(path, r);
-  return r.json();
-}
-
-function parseCsv(text) {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
-  const split = (line) => {
-    const out = []; let cur = ""; let q = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i], next = line[i + 1];
-      if (q) {
-        if (ch === '"' && next === '"') { cur += '"'; i++; }
-        else if (ch === '"') q = false;
-        else cur += ch;
-      } else if (ch === '"') q = true;
-      else if (ch === ",") { out.push(cur); cur = ""; }
-      else cur += ch;
-    }
-    out.push(cur);
-    return out;
-  };
-  const headers = split(lines.shift() || "").map((h) => h.trim());
-  return lines.map((line) => Object.fromEntries(split(line).map((v, i) => [headers[i], v ?? ""])));
-}
-
-function sniffMapping(columns) {
-  const aliases = {
-    entity_name: ["owner", "entity", "company", "name", "buyer", "seller"],
-    person_name: ["contact", "contact_name", "person", "principal"],
-    phone: ["phone", "tel", "mobile", "cell"],
-    email: ["email", "e-mail"],
-    mailing_address: ["mailing", "mailing_address", "address"],
-    title: ["title", "role"],
-    interaction_notes: ["notes", "comments", "remarks"],
-    channel: ["channel", "method"],
-  };
-  const out = {};
-  for (const col of columns) {
-    const key = String(col).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-    for (const [field, names] of Object.entries(aliases)) {
-      if (key === field || names.includes(key)) { out[col] = field; break; }
-    }
-  }
-  return out;
-}
-
-async function uploadCsvViaRpc(file, userId = "broker") {
-  if (!file.name.toLowerCase().endsWith(".csv")) throw new Error("Supabase RPC mode supports CSV contact imports. Excel imports require the optional FastAPI backend.");
-  const rows = parseCsv(await file.text());
-  const columns = rows[0] ? Object.keys(rows[0]) : [];
-  const mapping = sniffMapping(columns);
-  return rpc("api_upload_stage", { filename: file.name, user_id: userId, rows, columns, mapping });
-}
-
-function inferAsset(question) {
-  const q = question.toLowerCase();
-  if (q.includes("office")) return "Office";
-  if (q.includes("hotel")) return "Hotel";
-  if (q.includes("retail")) return "Retail";
-  if (q.includes("development") || q.includes("vacant") || q.includes("land")) return "Development Site";
-  if (q.includes("mixed")) return "Mixed Use";
-  if (q.includes("multifamily") || q.includes("multi family") || q.includes("apartment")) return "Multifamily";
-  return "";
-}
-function inferBorough(question) {
-  const q = question.toLowerCase();
-  if (q.includes("brooklyn")) return "Brooklyn";
-  if (q.includes("manhattan")) return "Manhattan";
-  if (q.includes("queens")) return "Queens";
-  if (q.includes("bronx")) return "Bronx";
-  if (q.includes("staten")) return "Staten Island";
-  return "";
-}
-function cleanContactQuery(question) {
-  return question.replace(/what'?s|what is|phone number|email|contact|for|owner|buyer|seller|who is|whats/gi, " ").replace(/[^a-z0-9 &.-]+/gi, " ").replace(/\s+/g, " ").trim();
-}
-
-async function liveDealDesk(question) {
-  const q = question.toLowerCase();
-  if (q.includes("phone") || q.includes("email") || q.includes("contact")) {
-    const term = cleanContactQuery(question);
-    const result = await rpc("api_contact_search", { q: term, lim: 10 });
-    const matches = result.matches || [];
-    const lines = matches.flatMap((m) => (m.contacts || []).map((c) => `${m.name}: ${c.phone || "no phone"} · ${c.email || "no email"} · ${c.source || "source unknown"}`));
-    return { tool: "api_contact_search", arguments: { q: term, lim: 10 }, plan_why: "Contact request detected; searching uploaded/public contact rows only.", result, answer: lines.length ? lines.slice(0, 6).join("\n") : `No phone or email is on file for ${term || "that query"}.`, providers: { plan: "supabase-rpc", answer: "deterministic" } };
-  }
-  if (q.includes("no contact") || q.includes("missing contact") || q.includes("contact gap")) {
-    const result = await rpc("api_buyers", { min_deals: 2, lim: 50 });
-    const candidates = (result.buyers || []).filter((b) => !b.has_contact).slice(0, 10);
-    return { tool: "api_buyers", arguments: { min_deals: 2, lim: 50, filtered: "missing contact" }, plan_why: "Missing-contact request detected; ranking active buyers with no contact rows.", result: { entities_missing_contact: candidates }, answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}`).join("\n") : "No active buyer contact gaps are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } };
-  }
-  if (q.includes("best buyer") || q.includes("top buyer") || q.includes("active buyer") || q.includes("buyers")) {
-    const args = { asset_type: inferAsset(question), borough: inferBorough(question), min_deals: 1, lim: 10 };
-    const result = await rpc("api_buyers", args);
-    const candidates = result.buyers || [];
-    return { tool: "api_buyers", arguments: args, plan_why: "Buyer-matching request detected; ranking buyers by transaction count and volume.", result: { candidates }, answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}${b.has_contact ? " · contact on file" : " · no contact on file"}`).join("\n") : "No matching buyers are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } };
-  }
-  const term = question.replace(/recent|deals|transactions|show|for|about/gi, " ").replace(/\s+/g, " ").trim();
-  const result = await rpc("api_recent_deals", { q: term, lim: 10 });
-  const deals = result.deals || [];
-  return { tool: "api_recent_deals", arguments: { q: term, lim: 10 }, plan_why: "Defaulted to recent transaction search.", result, answer: deals.length ? deals.map((d, i) => `${i + 1}. ${d.address || "Unknown address"} — ${d.asset_type || "asset"} · ${money(d.sale_price, true)} · buyer: ${d.buyer || "unknown"}`).join("\n") : "No matching transaction rows are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } };
-}
-
-const legacy = {
-  base: BASE,
-  meta: () => get("/api/meta"),
-  health: () => get("/api/health"),
-  deals: (params) => get("/api/deals", params),
-  buyers: (params) => get("/api/buyers", params),
-  leaderboards: (params) => get("/api/leaderboards", params),
-  entity: (id) => get(`/api/entities/${id}`),
-  agent: (question, history) => post("/api/agent", { question, history }),
-  uploads: () => get("/api/uploads"),
-  resolveUpload: (body) => post("/api/uploads/resolve", body),
-  review: (params) => get("/api/review", params),
-  reviewAct: (body) => post("/api/review/act", body),
-  workbench: () => get("/api/workbench"),
-  properties: (params) => get("/api/properties", params),
-  tasks: (params) => get("/api/tasks", params),
-  logInteraction: (body) => post("/api/interactions", body),
-  scraperRuns: (params) => get("/api/scrapers/runs", params),
-  requestScrape: (body) => post("/api/scrapers/request", body),
-  async uploadFile(file, userId = "broker") { const fd = new FormData(); fd.append("file", file); fd.append("user_id", userId); const r = await fetch(BASE + "/api/uploads", { method: "POST", body: fd }); if (!r.ok) throw new Error(`upload → HTTP ${r.status}`); return r.json(); },
-};
-
+const legacy = { base: BASE, meta: () => get("/api/meta"), health: () => get("/api/health"), deals: (params) => get("/api/deals", params), buyers: (params) => get("/api/buyers", params), leaderboards: (params) => get("/api/leaderboards", params), entity: (id) => get(`/api/entities/${id}`), agent: (question, history) => post("/api/agent", { question, history }), uploads: () => get("/api/uploads"), resolveUpload: (body) => post("/api/uploads/resolve", body), review: (params) => get("/api/review", params), reviewAct: (body) => post("/api/review/act", body), workbench: () => get("/api/workbench"), properties: (params) => get("/api/properties", params), tasks: (params) => get("/api/tasks", params), logInteraction: (body) => post("/api/interactions", body), scraperRuns: (params) => get("/api/scrapers/runs", params), requestScrape: (body) => post("/api/scrapers/request", body), audit: () => get("/api/admin/audit"), fixStaleRuns: () => post("/api/admin/fix-stale-runs", {}), outreachTargets: (params) => get("/api/outreach/targets", params), outreachDraft: (body) => post("/api/outreach/draft", body), async uploadFile(file, userId = "broker") { const fd = new FormData(); fd.append("file", file); fd.append("user_id", userId); const r = await fetch(BASE + "/api/uploads", { method: "POST", body: fd }); if (!r.ok) throw new Error(`upload -> HTTP ${r.status}`); return r.json(); } };
 const NUMERIC_DEAL_ARGS = ["price_min", "price_max", "units_min", "units_max", "sqft_min", "sqft_max", "ppsf_max", "confidence_min", "page", "per_page"];
-const rpcApi = {
-  base: BASE,
-  meta: () => rpc("api_meta", {}),
-  health: () => rpc("api_health", {}),
-  deals: ({ sort, order, has_buyer, ...rest } = {}) => rpc("api_deals", { ...clean(rest, NUMERIC_DEAL_ARGS), has_buyer: has_buyer === true || has_buyer === "true", ...(sort ? { sort_by: sort } : {}), ...(order ? { order_dir: order } : {}) }),
-  buyers: ({ limit, ...rest } = {}) => rpc("api_buyers", { ...clean(rest, ["price_min", "price_max", "min_deals"]), ...(limit ? { lim: Number(limit) } : {}) }),
-  leaderboards: (params) => rpc("api_leaderboards", clean(params, ["top"])),
-  entity: (id) => rpc("api_entity", { eid: id }),
-  agent: (question) => liveDealDesk(question),
-  uploads: () => rpc("api_uploads_list", {}),
-  uploadFile: uploadCsvViaRpc,
-  resolveUpload: ({ upload_id, mapping, user_id } = {}) => rpc("api_upload_resolve", { upload_id, mapping, user_id }),
-  review: ({ limit, ...rest } = {}) => rpc("api_review", { ...clean(rest), ...(limit ? { lim: Number(limit) } : {}) }),
-  reviewAct: async ({ review_id, action, entity_id, user_id }) => {
-    const res = await rpc("api_review_act", { review_id, action, entity_id: entity_id || null, user_id });
-    if (res && res.error) throw new Error(res.error);
-    return res;
-  },
-  workbench: () => rpc("api_workbench", {}),
-  properties: ({ contact_gap, page, per_page, ...rest } = {}) => rpc("api_properties", { ...clean(rest), contact_gap: contact_gap === true || contact_gap === "true", ...(page ? { page: Number(page) } : {}), ...(per_page ? { per_page: Number(per_page) } : {}) }),
-  tasks: ({ limit } = {}) => rpc("api_tasks", { ...(limit ? { lim: Number(limit) } : {}) }),
-  logInteraction: ({ entity_id, channel, subject, notes, outcome, user_id } = {}) => rpc("api_log_interaction", { entity_id, channel, subject, notes, outcome, user_id }),
-  scraperRuns: ({ limit } = {}) => rpc("api_scraper_runs", { ...(limit ? { lim: Number(limit) } : {}) }),
-  requestScrape: ({ job, user_id, options } = {}) => rpc("api_request_scrape", { job, user_id, options }),
-};
-
+const rpcApi = { base: BASE, meta: () => rpc("api_meta", {}), health: () => rpc("api_health", {}), deals: ({ sort, order, has_buyer, ...rest } = {}) => rpc("api_deals", { ...clean(rest, NUMERIC_DEAL_ARGS), has_buyer: has_buyer === true || has_buyer === "true", ...(sort ? { sort_by: sort } : {}), ...(order ? { order_dir: order } : {}) }), buyers: ({ limit, ...rest } = {}) => rpc("api_buyers", { ...clean(rest, ["price_min", "price_max", "min_deals"]), ...(limit ? { lim: Number(limit) } : {}) }), leaderboards: (params) => rpc("api_leaderboards", clean(params, ["top"])), entity: (id) => rpc("api_entity", { eid: id }), agent: (question) => liveDealDesk(question), uploads: () => rpc("api_uploads_list", {}), uploadFile: uploadCsvViaRpc, resolveUpload: ({ upload_id, mapping, user_id } = {}) => rpc("api_upload_resolve", { upload_id, mapping, user_id }), review: ({ limit, ...rest } = {}) => rpc("api_review", { ...clean(rest), ...(limit ? { lim: Number(limit) } : {}) }), reviewAct: async ({ review_id, action, entity_id, user_id }) => { const res = await rpc("api_review_act", { review_id, action, entity_id: entity_id || null, user_id }); if (res && res.error) throw new Error(res.error); return res; }, workbench: () => rpc("api_workbench", {}), properties: ({ contact_gap, page, per_page, ...rest } = {}) => rpc("api_properties", { ...clean(rest), contact_gap: contact_gap === true || contact_gap === "true", ...(page ? { page: Number(page) } : {}), ...(per_page ? { per_page: Number(per_page) } : {}) }), tasks: ({ limit } = {}) => rpc("api_tasks", { ...(limit ? { lim: Number(limit) } : {}) }), logInteraction: ({ entity_id, channel, subject, notes, outcome, user_id } = {}) => rpc("api_log_interaction", { entity_id, channel, subject, notes, outcome, user_id }), scraperRuns: ({ limit } = {}) => rpc("api_scraper_runs", { ...(limit ? { lim: Number(limit) } : {}) }), requestScrape: ({ job, user_id, options } = {}) => rpc("api_request_scrape", { job, user_id, options }), audit: rpcAudit, fixStaleRuns: async () => ({ fixed: [], count: 0 }), outreachTargets: rpcOutreachTargets, outreachDraft: rpcOutreachDraft };
 export const api = RPC_MODE ? rpcApi : legacy;
 export const IS_RPC_MODE = RPC_MODE;
-export function money(n, compact = false) { if (n === null || n === undefined) return "—"; const v = Number(n); if (compact) { if (v >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B"; if (v >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M"; if (v >= 1e3) return "$" + Math.round(v / 1e3) + "K"; } return "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 }); }
-export function num(n) { if (n === null || n === undefined) return "—"; return Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 }); }
-export function shortDate(d) { if (!d) return "—"; return String(d).slice(0, 10); }
+export function money(n, compact = false) { if (n === null || n === undefined) return "-"; const v = Number(n); if (compact) { if (v >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B"; if (v >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M"; if (v >= 1e3) return "$" + Math.round(v / 1e3) + "K"; } return "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+export function num(n) { if (n === null || n === undefined) return "-"; return Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+export function shortDate(d) { if (!d) return "-"; return String(d).slice(0, 10); }
