@@ -7,15 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: "Optional job type to claim"
+        description: "Optional job type to claim: traded_refresh, acris_refresh, property_owner_refresh, or full_refresh"
         required: false
-        type: choice
-        options:
-          - ""
-          - traded_refresh
-          - acris_refresh
-          - property_owner_refresh
-          - full_refresh
+        type: string
   schedule:
     - cron: "*/30 * * * *"
 
