@@ -3,13 +3,10 @@ const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 // Two transports, one api surface:
 //  * legacy mode — a FastAPI backend serving /api/* (localhost or Render/Railway)
 //  * rpc mode    — Supabase's PostgREST gateway calling the api_* SQL functions
-//    (migrations 004 and 010), used while no backend host exists.
+//    (migrations 004 and 010+), used while no backend host exists.
 const RPC_MODE = BASE.includes(".supabase.co");
 const SUPA = RPC_MODE ? new URL(BASE).origin : null;
 const ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
-
-const NEEDS_BACKEND =
-  "The AI Deal Desk provider router and confirm-merge entity resolution still require the optional FastAPI backend. The database tabs, workbench, owner workflow, tasks, scraper requests, review resolve/dismiss, and CSV contact upload now run in Supabase RPC mode.";
 
 async function fail(label, r) {
   let detail = "";
@@ -119,6 +116,92 @@ async function uploadCsvViaRpc(file, userId = "broker") {
   return rpc("api_upload_stage", { filename: file.name, user_id: userId, rows, columns, mapping });
 }
 
+function inferAsset(question) {
+  const q = question.toLowerCase();
+  if (q.includes("office")) return "Office";
+  if (q.includes("hotel")) return "Hotel";
+  if (q.includes("retail")) return "Retail";
+  if (q.includes("development") || q.includes("vacant") || q.includes("land")) return "Development Site";
+  if (q.includes("mixed")) return "Mixed Use";
+  if (q.includes("multifamily") || q.includes("multi family") || q.includes("apartment")) return "Multifamily";
+  return "";
+}
+
+function inferBorough(question) {
+  const q = question.toLowerCase();
+  if (q.includes("brooklyn")) return "Brooklyn";
+  if (q.includes("manhattan")) return "Manhattan";
+  if (q.includes("queens")) return "Queens";
+  if (q.includes("bronx")) return "Bronx";
+  if (q.includes("staten")) return "Staten Island";
+  return "";
+}
+
+function cleanContactQuery(question) {
+  return question
+    .replace(/what'?s|what is|phone number|email|contact|for|owner|buyer|seller|who is|whats/gi, " ")
+    .replace(/[^a-z0-9 &.-]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function liveDealDesk(question) {
+  const q = question.toLowerCase();
+  if (q.includes("phone") || q.includes("email") || q.includes("contact")) {
+    const term = cleanContactQuery(question);
+    const result = await rpc("api_contact_search", { q: term, lim: 10 });
+    const matches = result.matches || [];
+    const lines = matches.flatMap((m) => (m.contacts || []).map((c) => `${m.name}: ${c.phone || "no phone"} · ${c.email || "no email"} · ${c.source || "source unknown"}`));
+    return {
+      tool: "api_contact_search",
+      arguments: { q: term, lim: 10 },
+      plan_why: "Contact request detected; searching uploaded/public contact rows only.",
+      result,
+      answer: lines.length ? lines.slice(0, 6).join("\n") : `No phone or email is on file for ${term || "that query"}.`,
+      providers: { plan: "supabase-rpc", answer: "deterministic" },
+    };
+  }
+
+  if (q.includes("no contact") || q.includes("missing contact") || q.includes("contact gap")) {
+    const result = await rpc("api_buyers", { min_deals: 2, lim: 50 });
+    const candidates = (result.buyers || []).filter((b) => !b.has_contact).slice(0, 10);
+    return {
+      tool: "api_buyers",
+      arguments: { min_deals: 2, lim: 50, filtered: "missing contact" },
+      plan_why: "Missing-contact request detected; ranking active buyers with no contact rows.",
+      result: { entities_missing_contact: candidates },
+      answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}`).join("\n") : "No active buyer contact gaps are currently returned by the database.",
+      providers: { plan: "supabase-rpc", answer: "deterministic" },
+    };
+  }
+
+  if (q.includes("best buyer") || q.includes("top buyer") || q.includes("active buyer") || q.includes("buyers")) {
+    const args = { asset_type: inferAsset(question), borough: inferBorough(question), min_deals: 1, lim: 10 };
+    const result = await rpc("api_buyers", args);
+    const candidates = result.buyers || [];
+    return {
+      tool: "api_buyers",
+      arguments: args,
+      plan_why: "Buyer-matching request detected; ranking buyers by transaction count and volume.",
+      result: { candidates },
+      answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}${b.has_contact ? " · contact on file" : " · no contact on file"}`).join("\n") : "No matching buyers are currently returned by the database.",
+      providers: { plan: "supabase-rpc", answer: "deterministic" },
+    };
+  }
+
+  const term = question.replace(/recent|deals|transactions|show|for|about/gi, " ").replace(/\s+/g, " ").trim();
+  const result = await rpc("api_recent_deals", { q: term, lim: 10 });
+  const deals = result.deals || [];
+  return {
+    tool: "api_recent_deals",
+    arguments: { q: term, lim: 10 },
+    plan_why: "Defaulted to recent transaction search.",
+    result,
+    answer: deals.length ? deals.map((d, i) => `${i + 1}. ${d.address || "Unknown address"} — ${d.asset_type || "asset"} · ${money(d.sale_price, true)} · buyer: ${d.buyer || "unknown"}`).join("\n") : "No matching transaction rows are currently returned by the database.",
+    providers: { plan: "supabase-rpc", answer: "deterministic" },
+  };
+}
+
 const legacy = {
   base: BASE,
   meta: () => get("/api/meta"),
@@ -158,13 +241,13 @@ const rpcApi = {
   buyers: ({ limit, ...rest } = {}) => rpc("api_buyers", { ...clean(rest, ["price_min", "price_max", "min_deals"]), ...(limit ? { lim: Number(limit) } : {}) }),
   leaderboards: (params) => rpc("api_leaderboards", clean(params, ["top"])),
   entity: (id) => rpc("api_entity", { eid: id }),
-  agent: async () => ({ error: "backend_required_for_ai_agent", detail: "The AI Deal Desk provider router still requires the optional FastAPI backend.", hint: NEEDS_BACKEND }),
+  agent: (question) => liveDealDesk(question),
   uploads: () => rpc("api_uploads_list", {}),
   uploadFile: uploadCsvViaRpc,
   resolveUpload: ({ upload_id, mapping, user_id } = {}) => rpc("api_upload_resolve", { upload_id, mapping, user_id }),
   review: ({ limit, ...rest } = {}) => rpc("api_review", { ...clean(rest), ...(limit ? { lim: Number(limit) } : {}) }),
   reviewAct: async ({ review_id, action, user_id }) => {
-    if (action === "confirm_merge") throw new Error(NEEDS_BACKEND);
+    if (action === "confirm_merge") throw new Error("Confirm-merge still requires the backend because it mutates entity aliases and applies review payload decisions.");
     const res = await rpc("api_review_act", { review_id, action, user_id });
     if (res && res.error) throw new Error(res.error);
     return res;
