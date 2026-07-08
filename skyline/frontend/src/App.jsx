@@ -8,6 +8,7 @@ import Buyers from "./views/Buyers.jsx";
 import Leaderboards from "./views/Leaderboards.jsx";
 import Agent from "./views/Agent.jsx";
 import Uploads from "./views/Uploads.jsx";
+import Tasks from "./views/Tasks.jsx";
 import Scrapers from "./views/Scrapers.jsx";
 import Review from "./views/Review.jsx";
 
@@ -19,6 +20,7 @@ const TABS = [
   { id: "boards", label: "Leaderboards", glyph: "▚", C: Leaderboards },
   { id: "agent", label: "Deal Desk", glyph: "✦", C: Agent },
   { id: "uploads", label: "Contacts", glyph: "↥", C: Uploads },
+  { id: "tasks", label: "Tasks", glyph: "☑", C: Tasks },
   { id: "scrapers", label: "Scrapers", glyph: "↻", C: Scrapers },
   { id: "review", label: "Review", glyph: "◍", C: Review },
 ];
