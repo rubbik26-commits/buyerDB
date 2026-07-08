@@ -33,6 +33,7 @@ declare
   subject text := 'NYC investment sale opportunity';
   body text;
   draft_row jsonb;
+  new_draft_id uuid;
 begin
   select to_jsonb(e) into ent from sbi_entities e where e.entity_id=api_outreach_draft.entity_id;
   if ent is null then
@@ -70,7 +71,9 @@ begin
 
   insert into sbi_outreach_drafts(entity_id, user_id, property_summary, subject, body)
   values(api_outreach_draft.entity_id, coalesce(api_outreach_draft.user_id,'broker'), api_outreach_draft.property_summary, subject, body)
-  returning to_jsonb(sbi_outreach_drafts.*) into draft_row;
+  returning draft_id into new_draft_id;
+
+  select to_jsonb(d) into draft_row from sbi_outreach_drafts d where d.draft_id = new_draft_id;
 
   return jsonb_build_object('entity', ent, 'contacts', contacts, 'recent_deals', recent, 'subject', subject, 'body', body, 'draft', draft_row);
 end;
