@@ -35,7 +35,7 @@ jobs:
           cache: npm
           cache-dependency-path: skyline/frontend/package-lock.json
       - name: Install
-        run: npm ci
+        run: npm install
       - name: Build
         run: npm run build
       - name: Deploy to Netlify production
