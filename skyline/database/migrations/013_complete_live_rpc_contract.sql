@@ -89,7 +89,7 @@ begin
     select e.entity_id into eid from sbi_entities e where e.norm_name=normalized limit 1;
 
     if eid is null then
-      insert into sbi_entities(display_name,norm_name,entity_type) values(entity_name,normalized,'unknown') returning entity_id into eid;
+      insert into sbi_entities(display_name,entity_type) values(entity_name,'unknown') returning entity_id into eid;
       stats:=jsonb_set(stats,'{new_entity}',to_jsonb((stats->>'new_entity')::int+1));
     else
       stats:=jsonb_set(stats,'{auto_matched}',to_jsonb((stats->>'auto_matched')::int+1));
