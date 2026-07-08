@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { api, IS_RPC_MODE, num } from "../api/client.js";
+import { api, num } from "../api/client.js";
 import { Pill, Loading, Empty, ErrorBanner } from "../components/ui.jsx";
 
 export default function Review({ refreshMeta }) {
@@ -11,7 +11,7 @@ export default function Review({ refreshMeta }) {
   const seqRef = useRef(0);
 
   const load = useCallback(() => {
-    const seq = ++seqRef.current; // interleaved reloads must not resurrect a resolved item
+    const seq = ++seqRef.current;
     setLoading(true); setErr(null);
     api.review({ status: "open", issue_class: filter, limit: 50 })
       .then((d) => { if (seq === seqRef.current) setData(d); })
@@ -47,7 +47,7 @@ export default function Review({ refreshMeta }) {
           <div className="chip-row" style={{ flexWrap: "wrap" }}>
             <span className={`chip ${filter === "" ? "on" : ""}`} onClick={() => setFilter("")}>all</span>
             {Object.entries(counts).map(([k, v]) => (
-              <span key={k} className={`chip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{k} · {v}</span>
+              <span key={k} className={`chip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{k} · {num(v)}</span>
             ))}
           </div>
         </div>
@@ -83,13 +83,7 @@ export default function Review({ refreshMeta }) {
                       <div className="nm">{c.display_name}</div>
                       <div className="sc">{c.reason} · score {c.score}</div>
                     </div>
-                    {IS_RPC_MODE ? (
-                      // entity merges run Python entity-resolution on the
-                      // backend; offering the button in RPC mode dead-ends
-                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--tx-mute)" }}>merge needs backend</span>
-                    ) : (
-                      <button className="btn brass sm" disabled={acting === it.review_id} onClick={() => act(it, "confirm_merge", c.entity_id)}>This is the match</button>
-                    )}
+                    <button className="btn brass sm" disabled={acting === it.review_id} onClick={() => act(it, "confirm_merge", c.entity_id)}>This is the match</button>
                   </div>
                 ))}
               </div>
@@ -101,7 +95,7 @@ export default function Review({ refreshMeta }) {
             )}
           </div>
         ))
-      ))}
+      )}
     </div>
   );
 }
