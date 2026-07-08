@@ -1,9 +1,9 @@
-"""run_requested.py — claim scraper requests created by the UI.
+"""Claim and execute scraper requests created by the frontend Scrapers tab.
 
-The Scrapers tab writes durable rows to scrape_runs with status='requested'. This
-worker claims those rows and dispatches the existing proven worker modules. It is
-safe to run from cron/GitHub Actions/Render because the claim uses FOR UPDATE
-SKIP LOCKED and never runs the same requested row twice concurrently.
+The Netlify Scrapers tab writes request rows into sbi_source_runs. Because
+sbi_source_runs only allows operational statuses, a queued frontend request is
+stored as status='running' with stats.requested_status='requested'. This worker
+claims those rows and dispatches the live worker modules.
 """
 import argparse
 import json
@@ -14,14 +14,14 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from worker import store
-
+from worker import sbi_store as store
 
 SUPPORTED = {"traded_refresh", "acris_refresh", "property_owner_refresh", "full_refresh"}
+RUNS_TABLE = "sbi_source_runs"
 
 
-def _claim(conn, only_job=None):
-    where = "status='requested'"
+def claim(conn, only_job=None):
+    where = "status='running' AND coalesce(stats->>'requested_status','')='requested'"
     params = []
     if only_job:
         where += " AND job=%s"
@@ -29,9 +29,9 @@ def _claim(conn, only_job=None):
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT run_id, job, stats
-            FROM scrape_runs
+            FROM {RUNS_TABLE}
             WHERE {where}
-            ORDER BY started_at ASC
+            ORDER BY started_at ASC NULLS LAST
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         """, params)
@@ -39,21 +39,28 @@ def _claim(conn, only_job=None):
         if not row:
             return None
         run_id, job, stats = row
-        cur.execute("UPDATE scrape_runs SET status='running' WHERE run_id=%s", (run_id,))
-        return {"run_id": run_id, "job": job, "stats": stats or {}}
+        stats = stats or {}
+        if isinstance(stats, str):
+            try:
+                stats = json.loads(stats)
+            except Exception:
+                stats = {}
+        stats["requested_status"] = "claimed"
+        cur.execute(f"UPDATE {RUNS_TABLE} SET stats=%s WHERE run_id=%s", (json.dumps(stats), run_id))
+        return {"run_id": run_id, "job": job, "stats": stats}
 
 
-def _finish(conn, run_id, status, stats=None, error=None):
+def finish(conn, run_id, status, stats=None, error=None):
     store.finish_run(conn, run_id, status, stats or {}, error=error)
     conn.commit()
 
 
-def _run_traded(limit=None):
+def run_traded(limit=None):
     from worker import run_incremental
     return run_incremental.run(limit=limit)
 
 
-def _run_acris(limit=None):
+def run_acris(limit=None):
     from worker import phase2_stages
     return phase2_stages.run(limit=limit)
 
@@ -64,47 +71,43 @@ def execute(job, options=None):
     if isinstance(limit, str) and limit.isdigit():
         limit = int(limit)
     if job == "traded_refresh":
-        return {"traded_refresh": _run_traded(limit=limit)}
+        return {"traded_refresh": run_traded(limit=limit)}
     if job in ("acris_refresh", "property_owner_refresh"):
-        return {job: _run_acris(limit=limit)}
+        return {job: run_acris(limit=limit)}
     if job == "full_refresh":
-        return {
-            "traded_refresh": _run_traded(limit=limit),
-            "acris_refresh": _run_acris(limit=limit),
-        }
+        return {"traded_refresh": run_traded(limit=limit), "acris_refresh": run_acris(limit=limit)}
     return {"error": f"Unsupported requested job: {job}"}
 
 
 def run_once(only_job=None):
     conn = store.connect()
     try:
-        claimed = _claim(conn, only_job=only_job)
+        claimed = claim(conn, only_job=only_job)
         conn.commit()
         if not claimed:
             return {"claimed": False}
         run_id = claimed["run_id"]
         job = claimed["job"]
         request_stats = claimed.get("stats") or {}
-        options = {}
-        if isinstance(request_stats, dict):
-            options = request_stats.get("options") or {}
+        options = request_stats.get("options") if isinstance(request_stats, dict) else {}
+        options = options or {}
         if job not in SUPPORTED:
-            _finish(conn, run_id, "failed", {"requested_job": job}, error="Job is not supported by run_requested.py")
+            finish(conn, run_id, "failed", {"requested_job": job}, error="Unsupported requested job")
             return {"claimed": True, "run_id": str(run_id), "job": job, "status": "failed"}
         try:
             result = execute(job, options=options)
-            _finish(conn, run_id, "success", {"requested_job": job, "result": result})
+            finish(conn, run_id, "success", {"requested_job": job, "result": result})
             return {"claimed": True, "run_id": str(run_id), "job": job, "status": "success", "result": result}
         except Exception:
             err = traceback.format_exc()[:2000]
-            _finish(conn, run_id, "failed", {"requested_job": job}, error=err)
+            finish(conn, run_id, "failed", {"requested_job": job}, error=err)
             raise
     finally:
         conn.close()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run one requested scraper job from scrape_runs.")
+    parser = argparse.ArgumentParser(description="Run one requested scraper job from sbi_source_runs.")
     parser.add_argument("--job", choices=sorted(SUPPORTED), help="Only claim this job type.")
     args = parser.parse_args()
     print(json.dumps(run_once(only_job=args.job), default=str))
