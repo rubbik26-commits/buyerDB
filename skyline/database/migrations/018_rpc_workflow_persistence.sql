@@ -64,8 +64,8 @@ begin
          from (select value r from jsonb_array_elements(recent) limit 3) s) || '.';
   end if;
   property_line := case when coalesce(trim(api_outreach_draft.property_summary),'') <> ''
-    then ' I am reaching out about ' || trim(api_outreach_draft.property_summary) || '.'
-    else ' I am reaching out about a potential NYC investment sale opportunity.' end;
+    then 'I am reaching out about ' || trim(api_outreach_draft.property_summary) || '.'
+    else 'I am reaching out about a potential NYC investment sale opportunity.' end;
   body := (case when first_name is null then 'Hi,' else 'Hi ' || first_name || ',' end) || E'\n\n' || property_line || recent_line || E'\n\n' ||
           'Given your transaction history, I thought this may be worth putting in front of you. If it is not a fit, no problem - I would still appreciate knowing what you are focused on right now.' || E'\n\nBest,\nRobert';
 
