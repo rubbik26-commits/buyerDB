@@ -5,9 +5,9 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .db import db, rows
-from .routes import deals, agent, uploads, review
+from .routes import deals, agent, uploads, review, workbench
 
-app = FastAPI(title="Skyline Deal Intelligence API", version="1.0")
+app = FastAPI(title="Skyline Deal Intelligence API", version="1.1")
 
 origins = [o.strip() for o in os.environ.get("FRONTEND_URL", "http://localhost:5173").split(",")
            if o.strip() and o.strip() != "*"]  # '*' + allow_credentials would reflect any origin
@@ -21,6 +21,7 @@ app.include_router(deals.router)
 app.include_router(agent.router)
 app.include_router(uploads.router)
 app.include_router(review.router)
+app.include_router(workbench.router)
 
 
 @app.get("/api/health")

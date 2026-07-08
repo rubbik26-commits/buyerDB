@@ -1,24 +1,32 @@
 import React, { useEffect, useState } from "react";
 import { api, IS_RPC_MODE, money, num } from "./api/client.js";
 import { Loading } from "./components/ui.jsx";
+import Workbench from "./views/Workbench.jsx";
 import Deals from "./views/Deals.jsx";
+import Properties from "./views/Properties.jsx";
 import Buyers from "./views/Buyers.jsx";
 import Leaderboards from "./views/Leaderboards.jsx";
 import Agent from "./views/Agent.jsx";
 import Uploads from "./views/Uploads.jsx";
+import Tasks from "./views/Tasks.jsx";
+import Scrapers from "./views/Scrapers.jsx";
 import Review from "./views/Review.jsx";
 
 const TABS = [
+  { id: "workbench", label: "Workbench", glyph: "◆", C: Workbench },
   { id: "deals", label: "Deals", glyph: "▤", C: Deals },
+  { id: "properties", label: "Properties", glyph: "⌂", C: Properties },
   { id: "buyers", label: "Buyers", glyph: "◈", C: Buyers },
   { id: "boards", label: "Leaderboards", glyph: "▚", C: Leaderboards },
   { id: "agent", label: "Deal Desk", glyph: "✦", C: Agent },
   { id: "uploads", label: "Contacts", glyph: "↥", C: Uploads },
+  { id: "tasks", label: "Tasks", glyph: "☑", C: Tasks },
+  { id: "scrapers", label: "Scrapers", glyph: "↻", C: Scrapers },
   { id: "review", label: "Review", glyph: "◍", C: Review },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState("deals");
+  const [tab, setTab] = useState("workbench");
   const [meta, setMeta] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -36,7 +44,7 @@ export default function App() {
         <div className="brand">
           <div>
             <div className="mark">Sky<em>line</em></div>
-            <div className="sub">Deal Intelligence</div>
+            <div className="sub">Buyer Intelligence OS</div>
           </div>
         </div>
         <nav className="nav">
@@ -75,7 +83,7 @@ export default function App() {
             <div className="banner err">
               Can’t reach the API at <code>{api.base}</code>.{" "}
               {IS_RPC_MODE
-                ? "The Supabase project may be paused or unreachable — check its status."
+                ? "The Supabase project may be paused, unreachable, or missing VITE_SUPABASE_ANON_KEY."
                 : <>Start the backend (<code>uvicorn backend.app.main:app</code>) or set <code>VITE_API_URL</code>.</>}
               {" — "}{String(err.message || err)}
             </div>
