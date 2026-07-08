@@ -1,16 +1,7 @@
 """workbench.py — broker-facing workflow layer adapted from dealflow-insights.
 
 This is not a replacement schema. It sits on top of the canonical buyerDB tables
-and exposes the product workflows dealflow-insights had in the UI:
-
-* owner/property workbench
-* contact-gap worklist
-* broker tasks generated from real database gaps
-* scraper run visibility + manual run requests
-* interaction logging
-
-All data is read from the canonical tables created in 001_schema.sql. No Base44
-runtime, no app-builder dependency, no fabricated contacts.
+and exposes the product workflows dealflow-insights had in the UI.
 """
 import json
 from typing import Optional
@@ -42,20 +33,19 @@ class ScrapeRunRequest(BaseModel):
 
 @router.get("/workbench")
 def workbench():
-    """Executive command center: the fastest answer to "what should I work now?"""
+    """Executive command center: the fastest answer to what should I work now?"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT
-              count(*) AS deals,
-              count(*) FILTER (WHERE sale_price IS NOT NULL) AS priced_deals,
-              coalesce(sum(sale_price),0) AS total_volume,
-              count(DISTINCT dp.entity_id) FILTER (WHERE dp.role='buyer') AS unique_buyers,
-              count(DISTINCT dp.entity_id) FILTER (WHERE dp.role='seller') AS unique_sellers
-            FROM deals d
-            LEFT JOIN deal_parties dp USING (deal_id)
+            SELECT count(*) AS deals,
+                   count(*) FILTER (WHERE sale_price IS NOT NULL) AS priced_deals,
+                   coalesce(sum(sale_price),0) AS total_volume
+            FROM deals
         """)
         stats = rows(cur)[0]
-
+        cur.execute("SELECT count(DISTINCT entity_id) AS unique_buyers FROM deal_parties WHERE role='buyer'")
+        stats.update(rows(cur)[0])
+        cur.execute("SELECT count(DISTINCT entity_id) AS unique_sellers FROM deal_parties WHERE role='seller'")
+        stats.update(rows(cur)[0])
         cur.execute("SELECT count(*) AS open_reviews FROM review_queue WHERE status='open'")
         stats.update(rows(cur)[0])
         cur.execute("SELECT count(*) AS contacts FROM contacts")
@@ -133,22 +123,11 @@ def workbench():
         """)
         scrape_runs = rows(cur)
 
-    return {
-        "stats": stats,
-        "contact_gaps": contact_gaps,
-        "owner_targets": owner_targets,
-        "review_items": review_items,
-        "scrape_runs": scrape_runs,
-    }
+    return {"stats": stats, "contact_gaps": contact_gaps, "owner_targets": owner_targets, "review_items": review_items, "scrape_runs": scrape_runs}
 
 
 @router.get("/properties")
-def properties(q: Optional[str] = None,
-               borough: Optional[str] = None,
-               asset_type: Optional[str] = None,
-               contact_gap: bool = False,
-               page: int = Query(1, ge=1),
-               per_page: int = Query(50, ge=1, le=200)):
+def properties(q: Optional[str] = None, borough: Optional[str] = None, asset_type: Optional[str] = None, contact_gap: bool = False, page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200)):
     where = ["1=1"]
     params = []
     if q:
@@ -200,17 +179,11 @@ def properties(q: Optional[str] = None,
 
 @router.get("/tasks")
 def tasks(limit: int = Query(50, ge=1, le=200)):
-    """Generate broker tasks from real database gaps instead of storing fake to-dos."""
     task_rows = []
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT e.entity_id, e.display_name AS name,
-                   count(*) AS deal_count, coalesce(sum(d.sale_price),0) AS volume,
-                   max(d.sale_date) AS last_deal
-            FROM deal_parties dp
-            JOIN entities e USING (entity_id)
-            JOIN deals d USING (deal_id)
-            LEFT JOIN contacts c ON c.entity_id=e.entity_id
+            SELECT e.entity_id, e.display_name AS name, count(*) AS deal_count, coalesce(sum(d.sale_price),0) AS volume, max(d.sale_date) AS last_deal
+            FROM deal_parties dp JOIN entities e USING (entity_id) JOIN deals d USING (deal_id) LEFT JOIN contacts c ON c.entity_id=e.entity_id
             WHERE dp.role='buyer'
             GROUP BY e.entity_id, e.display_name
             HAVING count(*) >= 2 AND count(c.contact_id)=0
@@ -218,45 +191,14 @@ def tasks(limit: int = Query(50, ge=1, le=200)):
             LIMIT %s
         """, (limit,))
         for r in rows(cur):
-            task_rows.append({
-                "kind": "contact_gap",
-                "priority": "high" if (r.get("volume") or 0) >= 25_000_000 else "normal",
-                "entity_id": r["entity_id"],
-                "title": f"Find phone/email for {r['name']}",
-                "detail": f"{r['deal_count']} buyer deals · last deal {r.get('last_deal') or 'unknown'}",
-                "metric": r.get("volume"),
-            })
-
-        cur.execute("""
-            SELECT review_id, issue_class, severity, object_type, object_id, created_at
-            FROM review_queue
-            WHERE status='open'
-            ORDER BY created_at DESC
-            LIMIT %s
-        """, (limit,))
+            task_rows.append({"kind": "contact_gap", "priority": "high" if (r.get("volume") or 0) >= 25_000_000 else "normal", "entity_id": r["entity_id"], "title": f"Find phone/email for {r['name']}", "detail": f"{r['deal_count']} buyer deals - last deal {r.get('last_deal') or 'unknown'}", "metric": r.get("volume")})
+        cur.execute("""SELECT review_id, issue_class, severity, object_type, object_id, created_at FROM review_queue WHERE status='open' ORDER BY created_at DESC LIMIT %s""", (limit,))
         for r in rows(cur):
-            task_rows.append({
-                "kind": "review",
-                "priority": r.get("severity") or "normal",
-                "review_id": r["review_id"],
-                "title": f"Review {r['issue_class']}",
-                "detail": f"{r['object_type']} · {r['object_id']}",
-                "metric": None,
-                "created_at": r.get("created_at"),
-            })
-
+            task_rows.append({"kind": "review", "priority": r.get("severity") or "normal", "review_id": r["review_id"], "title": f"Review {r['issue_class']}", "detail": f"{r['object_type']} - {r['object_id']}", "metric": None, "created_at": r.get("created_at")})
         cur.execute("""
-            WITH last_touch AS (
-              SELECT entity_id, max(occurred_at) AS last_interaction
-              FROM interactions GROUP BY entity_id
-            )
-            SELECT e.entity_id, e.display_name AS name,
-                   count(*) AS deal_count, coalesce(sum(d.sale_price),0) AS volume,
-                   max(d.sale_date) AS last_deal, lt.last_interaction
-            FROM deal_parties dp
-            JOIN entities e USING (entity_id)
-            JOIN deals d USING (deal_id)
-            LEFT JOIN last_touch lt ON lt.entity_id=e.entity_id
+            WITH last_touch AS (SELECT entity_id, max(occurred_at) AS last_interaction FROM interactions GROUP BY entity_id)
+            SELECT e.entity_id, e.display_name AS name, count(*) AS deal_count, coalesce(sum(d.sale_price),0) AS volume, max(d.sale_date) AS last_deal, lt.last_interaction
+            FROM deal_parties dp JOIN entities e USING (entity_id) JOIN deals d USING (deal_id) LEFT JOIN last_touch lt ON lt.entity_id=e.entity_id
             WHERE dp.role='buyer'
             GROUP BY e.entity_id, e.display_name, lt.last_interaction
             HAVING count(*) >= 3 AND (lt.last_interaction IS NULL OR lt.last_interaction < now() - interval '90 days')
@@ -264,17 +206,8 @@ def tasks(limit: int = Query(50, ge=1, le=200)):
             LIMIT %s
         """, (limit,))
         for r in rows(cur):
-            task_rows.append({
-                "kind": "buyer_followup",
-                "priority": "normal",
-                "entity_id": r["entity_id"],
-                "title": f"Follow up with active buyer {r['name']}",
-                "detail": f"{r['deal_count']} purchases · last touch {r.get('last_interaction') or 'never logged'}",
-                "metric": r.get("volume"),
-            })
-
-    order = {"high": 0, "normal": 1, "low": 2}
-    task_rows.sort(key=lambda r: (order.get(r.get("priority"), 1), -(float(r.get("metric") or 0))))
+            task_rows.append({"kind": "buyer_followup", "priority": "normal", "entity_id": r["entity_id"], "title": f"Follow up with active buyer {r['name']}", "detail": f"{r['deal_count']} purchases - last touch {r.get('last_interaction') or 'never logged'}", "metric": r.get("volume")})
+    task_rows.sort(key=lambda r: ({"high": 0, "normal": 1, "low": 2}.get(r.get("priority"), 1), -(float(r.get("metric") or 0))))
     return {"tasks": task_rows[:limit]}
 
 
@@ -291,30 +224,19 @@ def create_interaction(body: InteractionCreate):
             INSERT INTO interactions (entity_id, contact_id, user_id, channel, occurred_at, subject, notes, outcome)
             VALUES (%s,%s,%s,%s,coalesce(%s::timestamptz, now()),%s,%s,%s)
             RETURNING interaction_id, entity_id, contact_id, user_id, channel, occurred_at, subject, notes, outcome
-        """, (body.entity_id, body.contact_id, body.user_id, channel, body.occurred_at,
-              body.subject, body.notes, body.outcome))
+        """, (body.entity_id, body.contact_id, body.user_id, channel, body.occurred_at, body.subject, body.notes, body.outcome))
         return {"interaction": rows(cur)[0]}
 
 
 @router.get("/scrapers/runs")
 def scrape_runs(limit: int = Query(50, ge=1, le=200)):
     with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT run_id, job, started_at, finished_at, status, stats, error
-            FROM scrape_runs
-            ORDER BY started_at DESC
-            LIMIT %s
-        """, (limit,))
+        cur.execute("SELECT run_id, job, started_at, finished_at, status, stats, error FROM scrape_runs ORDER BY started_at DESC LIMIT %s", (limit,))
         return {"runs": rows(cur)}
 
 
 @router.post("/scrapers/request")
 def request_scrape(body: ScrapeRunRequest):
-    """Record a manual scrape request for the worker/scheduler.
-
-    The route deliberately does not pretend the job ran inside the web request.
-    Worker code can claim rows where status='requested'.
-    """
     allowed = {"traded_refresh", "acris_refresh", "crexi_refresh", "property_owner_refresh", "full_refresh"}
     job = body.job if body.job in allowed else "full_refresh"
     payload = {"requested_by": body.user_id, "options": body.options or {}}
