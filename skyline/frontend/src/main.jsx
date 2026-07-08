@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 import "./styles.css";
+import "./workflows.css";
 
 // Top-level boundary: without it a render error in any single view blanks the
 // entire app with no message.
