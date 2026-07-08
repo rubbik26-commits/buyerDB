@@ -1,0 +1,45 @@
+name: seed-sbi-dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: "Reset and reload sbi_* tables before seeding"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skyline
+    env:
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify database URL secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "Missing SUPABASE_DB_URL or DATABASE_URL repository secret."
+            exit 1
+          fi
+      - name: Install loader dependencies
+        run: pip install -r requirements.txt
+      - name: Seed sbi dataset
+        run: |
+          if [ "${{ inputs.reset }}" = "true" ]; then
+            python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv --reset
+          else
+            python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
+          fi
