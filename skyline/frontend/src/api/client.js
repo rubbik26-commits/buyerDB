@@ -18,11 +18,7 @@ async function rpc(fn, args) {
   if (!ANON) throw new Error("VITE_SUPABASE_ANON_KEY is required for Supabase RPC mode.");
   const r = await fetch(`${SUPA}/rest/v1/rpc/${fn}`, {
     method: "POST",
-    headers: {
-      apikey: ANON,
-      Authorization: `Bearer ${ANON}`,
-      "Content-Type": "application/json",
-    },
+    headers: { apikey: ANON, Authorization: `Bearer ${ANON}`, "Content-Type": "application/json" },
     body: JSON.stringify(args || {}),
   });
   if (!r.ok) await fail(fn, r);
@@ -46,22 +42,14 @@ function clean(params, numeric = []) {
 
 async function get(path, params) {
   const url = new URL(BASE + path);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
-    });
-  }
+  if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v); });
   const r = await fetch(url);
   if (!r.ok) await fail(path, r);
   return r.json();
 }
 
 async function post(path, body) {
-  const r = await fetch(BASE + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const r = await fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) await fail(path, r);
   return r.json();
 }
@@ -126,7 +114,6 @@ function inferAsset(question) {
   if (q.includes("multifamily") || q.includes("multi family") || q.includes("apartment")) return "Multifamily";
   return "";
 }
-
 function inferBorough(question) {
   const q = question.toLowerCase();
   if (q.includes("brooklyn")) return "Brooklyn";
@@ -136,13 +123,8 @@ function inferBorough(question) {
   if (q.includes("staten")) return "Staten Island";
   return "";
 }
-
 function cleanContactQuery(question) {
-  return question
-    .replace(/what'?s|what is|phone number|email|contact|for|owner|buyer|seller|who is|whats/gi, " ")
-    .replace(/[^a-z0-9 &.-]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return question.replace(/what'?s|what is|phone number|email|contact|for|owner|buyer|seller|who is|whats/gi, " ").replace(/[^a-z0-9 &.-]+/gi, " ").replace(/\s+/g, " ").trim();
 }
 
 async function liveDealDesk(question) {
@@ -152,54 +134,23 @@ async function liveDealDesk(question) {
     const result = await rpc("api_contact_search", { q: term, lim: 10 });
     const matches = result.matches || [];
     const lines = matches.flatMap((m) => (m.contacts || []).map((c) => `${m.name}: ${c.phone || "no phone"} · ${c.email || "no email"} · ${c.source || "source unknown"}`));
-    return {
-      tool: "api_contact_search",
-      arguments: { q: term, lim: 10 },
-      plan_why: "Contact request detected; searching uploaded/public contact rows only.",
-      result,
-      answer: lines.length ? lines.slice(0, 6).join("\n") : `No phone or email is on file for ${term || "that query"}.`,
-      providers: { plan: "supabase-rpc", answer: "deterministic" },
-    };
+    return { tool: "api_contact_search", arguments: { q: term, lim: 10 }, plan_why: "Contact request detected; searching uploaded/public contact rows only.", result, answer: lines.length ? lines.slice(0, 6).join("\n") : `No phone or email is on file for ${term || "that query"}.`, providers: { plan: "supabase-rpc", answer: "deterministic" } };
   }
-
   if (q.includes("no contact") || q.includes("missing contact") || q.includes("contact gap")) {
     const result = await rpc("api_buyers", { min_deals: 2, lim: 50 });
     const candidates = (result.buyers || []).filter((b) => !b.has_contact).slice(0, 10);
-    return {
-      tool: "api_buyers",
-      arguments: { min_deals: 2, lim: 50, filtered: "missing contact" },
-      plan_why: "Missing-contact request detected; ranking active buyers with no contact rows.",
-      result: { entities_missing_contact: candidates },
-      answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}`).join("\n") : "No active buyer contact gaps are currently returned by the database.",
-      providers: { plan: "supabase-rpc", answer: "deterministic" },
-    };
+    return { tool: "api_buyers", arguments: { min_deals: 2, lim: 50, filtered: "missing contact" }, plan_why: "Missing-contact request detected; ranking active buyers with no contact rows.", result: { entities_missing_contact: candidates }, answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}`).join("\n") : "No active buyer contact gaps are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } };
   }
-
   if (q.includes("best buyer") || q.includes("top buyer") || q.includes("active buyer") || q.includes("buyers")) {
     const args = { asset_type: inferAsset(question), borough: inferBorough(question), min_deals: 1, lim: 10 };
     const result = await rpc("api_buyers", args);
     const candidates = result.buyers || [];
-    return {
-      tool: "api_buyers",
-      arguments: args,
-      plan_why: "Buyer-matching request detected; ranking buyers by transaction count and volume.",
-      result: { candidates },
-      answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}${b.has_contact ? " · contact on file" : " · no contact on file"}`).join("\n") : "No matching buyers are currently returned by the database.",
-      providers: { plan: "supabase-rpc", answer: "deterministic" },
-    };
+    return { tool: "api_buyers", arguments: args, plan_why: "Buyer-matching request detected; ranking buyers by transaction count and volume.", result: { candidates }, answer: candidates.length ? candidates.map((b, i) => `${i + 1}. ${b.name} — ${num(b.n)} deals · ${money(b.vol, true)}${b.has_contact ? " · contact on file" : " · no contact on file"}`).join("\n") : "No matching buyers are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } };
   }
-
   const term = question.replace(/recent|deals|transactions|show|for|about/gi, " ").replace(/\s+/g, " ").trim();
   const result = await rpc("api_recent_deals", { q: term, lim: 10 });
   const deals = result.deals || [];
-  return {
-    tool: "api_recent_deals",
-    arguments: { q: term, lim: 10 },
-    plan_why: "Defaulted to recent transaction search.",
-    result,
-    answer: deals.length ? deals.map((d, i) => `${i + 1}. ${d.address || "Unknown address"} — ${d.asset_type || "asset"} · ${money(d.sale_price, true)} · buyer: ${d.buyer || "unknown"}`).join("\n") : "No matching transaction rows are currently returned by the database.",
-    providers: { plan: "supabase-rpc", answer: "deterministic" },
-  };
+  return { tool: "api_recent_deals", arguments: { q: term, lim: 10 }, plan_why: "Defaulted to recent transaction search.", result, answer: deals.length ? deals.map((d, i) => `${i + 1}. ${d.address || "Unknown address"} — ${d.asset_type || "asset"} · ${money(d.sale_price, true)} · buyer: ${d.buyer || "unknown"}`).join("\n") : "No matching transaction rows are currently returned by the database.", providers: { plan: "supabase-rpc", answer: "deterministic" } };
 }
 
 const legacy = {
@@ -221,18 +172,10 @@ const legacy = {
   logInteraction: (body) => post("/api/interactions", body),
   scraperRuns: (params) => get("/api/scrapers/runs", params),
   requestScrape: (body) => post("/api/scrapers/request", body),
-  async uploadFile(file, userId = "broker") {
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("user_id", userId);
-    const r = await fetch(BASE + "/api/uploads", { method: "POST", body: fd });
-    if (!r.ok) throw new Error(`upload → HTTP ${r.status}`);
-    return r.json();
-  },
+  async uploadFile(file, userId = "broker") { const fd = new FormData(); fd.append("file", file); fd.append("user_id", userId); const r = await fetch(BASE + "/api/uploads", { method: "POST", body: fd }); if (!r.ok) throw new Error(`upload → HTTP ${r.status}`); return r.json(); },
 };
 
 const NUMERIC_DEAL_ARGS = ["price_min", "price_max", "units_min", "units_max", "sqft_min", "sqft_max", "ppsf_max", "confidence_min", "page", "per_page"];
-
 const rpcApi = {
   base: BASE,
   meta: () => rpc("api_meta", {}),
@@ -246,9 +189,8 @@ const rpcApi = {
   uploadFile: uploadCsvViaRpc,
   resolveUpload: ({ upload_id, mapping, user_id } = {}) => rpc("api_upload_resolve", { upload_id, mapping, user_id }),
   review: ({ limit, ...rest } = {}) => rpc("api_review", { ...clean(rest), ...(limit ? { lim: Number(limit) } : {}) }),
-  reviewAct: async ({ review_id, action, user_id }) => {
-    if (action === "confirm_merge") throw new Error("Confirm-merge still requires the backend because it mutates entity aliases and applies review payload decisions.");
-    const res = await rpc("api_review_act", { review_id, action, user_id });
+  reviewAct: async ({ review_id, action, entity_id, user_id }) => {
+    const res = await rpc("api_review_act", { review_id, action, entity_id: entity_id || null, user_id });
     if (res && res.error) throw new Error(res.error);
     return res;
   },
@@ -262,24 +204,6 @@ const rpcApi = {
 
 export const api = RPC_MODE ? rpcApi : legacy;
 export const IS_RPC_MODE = RPC_MODE;
-
-export function money(n, compact = false) {
-  if (n === null || n === undefined) return "—";
-  const v = Number(n);
-  if (compact) {
-    if (v >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B";
-    if (v >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M";
-    if (v >= 1e3) return "$" + Math.round(v / 1e3) + "K";
-  }
-  return "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 });
-}
-
-export function num(n) {
-  if (n === null || n === undefined) return "—";
-  return Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 });
-}
-
-export function shortDate(d) {
-  if (!d) return "—";
-  return String(d).slice(0, 10);
-}
+export function money(n, compact = false) { if (n === null || n === undefined) return "—"; const v = Number(n); if (compact) { if (v >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B"; if (v >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M"; if (v >= 1e3) return "$" + Math.round(v / 1e3) + "K"; } return "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+export function num(n) { if (n === null || n === undefined) return "—"; return Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+export function shortDate(d) { if (!d) return "—"; return String(d).slice(0, 10); }
