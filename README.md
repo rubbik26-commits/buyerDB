@@ -21,6 +21,12 @@ scripts/   CSV → Postgres migration + assertions
 > workflows live at the repo root (`.github/workflows/`) and are already
 > path-adjusted for this nesting.
 >
+> **Consolidated source of truth (2026-07-09):** `rubbik26-commits/buyerDB` is
+> now the unified repository for the Buyer Intelligence / Deal Intelligence app.
+> The older `rubbik26-commits/buyers` repo is treated as legacy source material.
+> Netlify project `buyerdb` must be linked to this repo on branch `ACRIS`; see
+> `CONSOLIDATION.md` and `architecture/SOP-deploy-links.md` before deploying.
+>
 > **Current production topology (2026-07-06, decisions D-008/D-010):**
 > Netlify hosts the static frontend at **buyerdb.netlify.app**, built in **RPC
 > mode** — the bundle talks straight to Supabase PostgREST (`api_*` functions,
@@ -59,6 +65,8 @@ proxy, and the dataset is already >1 MB and grows daily. All four are structural
 Prereqs: Python 3.12, Node 18+, PostgreSQL 16.
 
 ```bash
+cd skyline
+
 # 1. database
 createdb skyline
 psql skyline -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
@@ -85,9 +93,10 @@ Without any AI key the four data tabs work fully; the Deal Desk returns an hones
 ## Tests
 
 ```bash
+cd skyline
 python -m pytest worker/test_store.py backend/tests worker/test_run_incremental.py -q
 python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv
-cd frontend && npm run build      # production build; grep dist/ shows no secrets
+cd frontend && npm run build      # production build; dist contains only public frontend env
 ```
 
 ## The AI agent
@@ -142,7 +151,8 @@ need ScraperAPI (~11 credits per protected page). That's why the fallback worker
 ## Deploy
 
 Frontend → Netlify (static, RPC mode; `netlify.toml` at repo root — production is
-buyerdb.netlify.app, with a GitHub Pages mirror via `deploy-frontend.yml`).
+buyerdb.netlify.app, with a GitHub Pages mirror via `deploy-frontend.yml`). Netlify must be
+linked to `rubbik26-commits/buyerDB`, branch `ACRIS`, with build base `skyline/frontend`.
 Postgres → Supabase (Pro recommended for backups and no idle-pause). Optional:
 Backend → Render/Railway (FastAPI via `render.yaml`; then point `VITE_API_URL` at it),
 legacy worker → GitHub Actions (set `DATABASE_URL` secret + `ENABLE_LEGACY_WORKER=true`).
@@ -158,5 +168,3 @@ Estimated cost: $0 prototype → ~$32–42/mo production.
   Verified end-to-end.
 - **C — provider failover:** `backend/tests/test_provider_router.py` — kill the primary, the
   request succeeds via fallback, `fallback_from` is logged. 6/6 PASS.
-- **D — no secrets in the client bundle:** the built `dist/` references only `VITE_API_URL`; the
-  precise secret-pattern scan is clean.
