@@ -1,14 +1,8 @@
-"""workbench.py — broker-facing workflow layer adapted from dealflow-insights.
-
-This is not a replacement schema. It sits on top of the canonical buyerDB tables
-and exposes the product workflows dealflow-insights had in the UI.
-"""
+"""workbench.py — broker workflow layer over the live sbi_* schema."""
 import json
 from typing import Optional
-
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
-
 from ..db import db, rows
 
 router = APIRouter(prefix="/api")
@@ -33,53 +27,52 @@ class ScrapeRunRequest(BaseModel):
 
 @router.get("/workbench")
 def workbench():
-    """Executive command center: the fastest answer to what should I work now?"""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT count(*) AS deals,
                    count(*) FILTER (WHERE sale_price IS NOT NULL) AS priced_deals,
                    coalesce(sum(sale_price),0) AS total_volume
-            FROM deals
+            FROM sbi_deals
         """)
         stats = rows(cur)[0]
-        cur.execute("SELECT count(DISTINCT entity_id) AS unique_buyers FROM deal_parties WHERE role='buyer'")
+        cur.execute("SELECT count(DISTINCT entity_id) AS unique_buyers FROM sbi_deal_parties WHERE role='buyer'")
         stats.update(rows(cur)[0])
-        cur.execute("SELECT count(DISTINCT entity_id) AS unique_sellers FROM deal_parties WHERE role='seller'")
+        cur.execute("SELECT count(DISTINCT entity_id) AS unique_sellers FROM sbi_deal_parties WHERE role='seller'")
         stats.update(rows(cur)[0])
-        cur.execute("SELECT count(*) AS open_reviews FROM review_queue WHERE status='open'")
+        cur.execute("SELECT count(*) AS open_reviews FROM sbi_review_queue WHERE status='open'")
         stats.update(rows(cur)[0])
-        cur.execute("SELECT count(*) AS contacts FROM contacts")
+        cur.execute("SELECT count(*) AS contacts FROM sbi_contacts")
         stats.update(rows(cur)[0])
         cur.execute("""
             SELECT count(*) AS contact_gaps
             FROM (
               SELECT e.entity_id
-              FROM deal_parties dp
-              JOIN entities e USING (entity_id)
-              LEFT JOIN contacts c ON c.entity_id=e.entity_id
+              FROM sbi_deal_parties dp
+              JOIN sbi_entities e USING (entity_id)
+              LEFT JOIN sbi_contacts c ON c.entity_id=e.entity_id
               WHERE dp.role='buyer'
               GROUP BY e.entity_id
-              HAVING count(*) >= 2 AND count(c.contact_id)=0
+              HAVING count(DISTINCT dp.deal_id) >= 2 AND count(DISTINCT c.contact_id)=0
             ) x
         """)
         stats.update(rows(cur)[0])
 
         cur.execute("""
             SELECT e.entity_id, e.display_name AS name,
-                   count(*) AS deal_count,
+                   count(DISTINCT d.deal_id) AS deal_count,
                    coalesce(sum(d.sale_price),0) AS volume,
                    max(d.sale_date) AS last_deal,
                    array_remove(array_agg(DISTINCT d.asset_type), NULL) AS asset_types,
                    array_remove(array_agg(DISTINCT p.borough), NULL) AS boroughs
-            FROM deal_parties dp
-            JOIN entities e USING (entity_id)
-            JOIN deals d USING (deal_id)
-            JOIN properties p USING (property_id)
-            LEFT JOIN contacts c ON c.entity_id=e.entity_id
+            FROM sbi_deal_parties dp
+            JOIN sbi_entities e USING (entity_id)
+            JOIN sbi_deals d USING (deal_id)
+            JOIN sbi_properties p USING (property_id)
+            LEFT JOIN sbi_contacts c ON c.entity_id=e.entity_id
             WHERE dp.role='buyer'
             GROUP BY e.entity_id, e.display_name
-            HAVING count(*) >= 2 AND count(c.contact_id)=0
-            ORDER BY coalesce(sum(d.sale_price),0) DESC NULLS LAST, count(*) DESC
+            HAVING count(DISTINCT d.deal_id) >= 2 AND count(DISTINCT c.contact_id)=0
+            ORDER BY coalesce(sum(d.sale_price),0) DESC NULLS LAST, count(DISTINCT d.deal_id) DESC
             LIMIT 10
         """)
         contact_gaps = rows(cur)
@@ -90,15 +83,15 @@ def workbench():
                      p.property_id, p.address_raw AS address, p.borough, p.market,
                      d.deal_id, d.sale_date, d.sale_price, d.asset_type,
                      be.entity_id AS owner_entity_id, be.display_name AS known_owner
-              FROM properties p
-              JOIN deals d USING (property_id)
-              LEFT JOIN deal_parties bdp ON bdp.deal_id=d.deal_id AND bdp.role='buyer'
-              LEFT JOIN entities be ON be.entity_id=bdp.entity_id
+              FROM sbi_properties p
+              JOIN sbi_deals d USING (property_id)
+              LEFT JOIN sbi_deal_parties bdp ON bdp.deal_id=d.deal_id AND bdp.role='buyer'
+              LEFT JOIN sbi_entities be ON be.entity_id=bdp.entity_id
               ORDER BY p.property_id, d.sale_date DESC NULLS LAST, d.created_at DESC
             )
             SELECT latest.*,
-                   EXISTS (SELECT 1 FROM contacts c WHERE c.entity_id=latest.owner_entity_id) AS has_contact,
-                   EXISTS (SELECT 1 FROM interactions i WHERE i.entity_id=latest.owner_entity_id) AS has_interaction
+                   EXISTS (SELECT 1 FROM sbi_contacts c WHERE c.entity_id=latest.owner_entity_id) AS has_contact,
+                   EXISTS (SELECT 1 FROM sbi_interactions i WHERE i.entity_id=latest.owner_entity_id) AS has_interaction
             FROM latest
             WHERE owner_entity_id IS NOT NULL
             ORDER BY sale_price DESC NULLS LAST, sale_date DESC NULLS LAST
@@ -108,7 +101,7 @@ def workbench():
 
         cur.execute("""
             SELECT review_id, object_type, object_id, issue_class, severity, payload, created_at
-            FROM review_queue
+            FROM sbi_review_queue
             WHERE status='open'
             ORDER BY created_at DESC
             LIMIT 10
@@ -117,7 +110,7 @@ def workbench():
 
         cur.execute("""
             SELECT run_id, job, started_at, finished_at, status, stats, error
-            FROM scrape_runs
+            FROM sbi_source_runs
             ORDER BY started_at DESC
             LIMIT 8
         """)
@@ -140,23 +133,23 @@ def properties(q: Optional[str] = None, borough: Optional[str] = None, asset_typ
         where.append("d.asset_type=%s")
         params.append(asset_type)
     if contact_gap:
-        where.append("be.entity_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.entity_id=be.entity_id)")
+        where.append("be.entity_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sbi_contacts c WHERE c.entity_id=be.entity_id)")
 
     base = f"""
         WITH latest AS (
           SELECT DISTINCT ON (p.property_id)
                  p.property_id, p.address_raw AS address, p.address_norm, p.borough,
-                 p.market, p.zip, p.bbl, p.units AS property_units, p.sqft AS property_sqft,
+                 p.market, p.zip, p.bbl, p.total_units AS property_units, p.building_area AS property_sqft,
                  d.deal_id, d.sale_date, d.sale_price, d.asset_type, d.units AS deal_units,
                  d.sqft AS deal_sqft, d.source_system, d.source_url,
                  be.entity_id AS owner_entity_id, be.display_name AS current_owner,
                  se.entity_id AS seller_entity_id, se.display_name AS seller
-          FROM properties p
-          JOIN deals d USING (property_id)
-          LEFT JOIN deal_parties bdp ON bdp.deal_id=d.deal_id AND bdp.role='buyer'
-          LEFT JOIN entities be ON be.entity_id=bdp.entity_id
-          LEFT JOIN deal_parties sdp ON sdp.deal_id=d.deal_id AND sdp.role='seller'
-          LEFT JOIN entities se ON se.entity_id=sdp.entity_id
+          FROM sbi_properties p
+          JOIN sbi_deals d USING (property_id)
+          LEFT JOIN sbi_deal_parties bdp ON bdp.deal_id=d.deal_id AND bdp.role='buyer'
+          LEFT JOIN sbi_entities be ON be.entity_id=bdp.entity_id
+          LEFT JOIN sbi_deal_parties sdp ON sdp.deal_id=d.deal_id AND sdp.role='seller'
+          LEFT JOIN sbi_entities se ON se.entity_id=sdp.entity_id
           WHERE {' AND '.join(where)}
           ORDER BY p.property_id, d.sale_date DESC NULLS LAST, d.created_at DESC
         )
@@ -166,9 +159,9 @@ def properties(q: Optional[str] = None, borough: Optional[str] = None, asset_typ
         total = cur.fetchone()[0]
         cur.execute(base + """
             SELECT latest.*,
-                   EXISTS (SELECT 1 FROM contacts c WHERE c.entity_id=latest.owner_entity_id) AS has_contact,
-                   (SELECT max(i.occurred_at) FROM interactions i WHERE i.entity_id=latest.owner_entity_id) AS last_interaction,
-                   (SELECT count(*) FROM deals d2 WHERE d2.property_id=latest.property_id) AS deal_count
+                   EXISTS (SELECT 1 FROM sbi_contacts c WHERE c.entity_id=latest.owner_entity_id) AS has_contact,
+                   (SELECT max(i.occurred_at) FROM sbi_interactions i WHERE i.entity_id=latest.owner_entity_id) AS last_interaction,
+                   (SELECT count(*) FROM sbi_deals d2 WHERE d2.property_id=latest.property_id) AS deal_count
             FROM latest
             ORDER BY sale_date DESC NULLS LAST, sale_price DESC NULLS LAST, address
             LIMIT %s OFFSET %s
@@ -182,26 +175,26 @@ def tasks(limit: int = Query(50, ge=1, le=200)):
     task_rows = []
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT e.entity_id, e.display_name AS name, count(*) AS deal_count, coalesce(sum(d.sale_price),0) AS volume, max(d.sale_date) AS last_deal
-            FROM deal_parties dp JOIN entities e USING (entity_id) JOIN deals d USING (deal_id) LEFT JOIN contacts c ON c.entity_id=e.entity_id
+            SELECT e.entity_id, e.display_name AS name, count(DISTINCT d.deal_id) AS deal_count, coalesce(sum(d.sale_price),0) AS volume, max(d.sale_date) AS last_deal
+            FROM sbi_deal_parties dp JOIN sbi_entities e USING (entity_id) JOIN sbi_deals d USING (deal_id) LEFT JOIN sbi_contacts c ON c.entity_id=e.entity_id
             WHERE dp.role='buyer'
             GROUP BY e.entity_id, e.display_name
-            HAVING count(*) >= 2 AND count(c.contact_id)=0
+            HAVING count(DISTINCT d.deal_id) >= 2 AND count(DISTINCT c.contact_id)=0
             ORDER BY volume DESC NULLS LAST, deal_count DESC
             LIMIT %s
         """, (limit,))
         for r in rows(cur):
             task_rows.append({"kind": "contact_gap", "priority": "high" if (r.get("volume") or 0) >= 25_000_000 else "normal", "entity_id": r["entity_id"], "title": f"Find phone/email for {r['name']}", "detail": f"{r['deal_count']} buyer deals - last deal {r.get('last_deal') or 'unknown'}", "metric": r.get("volume")})
-        cur.execute("""SELECT review_id, issue_class, severity, object_type, object_id, created_at FROM review_queue WHERE status='open' ORDER BY created_at DESC LIMIT %s""", (limit,))
+        cur.execute("""SELECT review_id, issue_class, severity, object_type, object_id, created_at FROM sbi_review_queue WHERE status='open' ORDER BY created_at DESC LIMIT %s""", (limit,))
         for r in rows(cur):
             task_rows.append({"kind": "review", "priority": r.get("severity") or "normal", "review_id": r["review_id"], "title": f"Review {r['issue_class']}", "detail": f"{r['object_type']} - {r['object_id']}", "metric": None, "created_at": r.get("created_at")})
         cur.execute("""
-            WITH last_touch AS (SELECT entity_id, max(occurred_at) AS last_interaction FROM interactions GROUP BY entity_id)
-            SELECT e.entity_id, e.display_name AS name, count(*) AS deal_count, coalesce(sum(d.sale_price),0) AS volume, max(d.sale_date) AS last_deal, lt.last_interaction
-            FROM deal_parties dp JOIN entities e USING (entity_id) JOIN deals d USING (deal_id) LEFT JOIN last_touch lt ON lt.entity_id=e.entity_id
+            WITH last_touch AS (SELECT entity_id, max(occurred_at) AS last_interaction FROM sbi_interactions GROUP BY entity_id)
+            SELECT e.entity_id, e.display_name AS name, count(DISTINCT d.deal_id) AS deal_count, coalesce(sum(d.sale_price),0) AS volume, max(d.sale_date) AS last_deal, lt.last_interaction
+            FROM sbi_deal_parties dp JOIN sbi_entities e USING (entity_id) JOIN sbi_deals d USING (deal_id) LEFT JOIN last_touch lt ON lt.entity_id=e.entity_id
             WHERE dp.role='buyer'
             GROUP BY e.entity_id, e.display_name, lt.last_interaction
-            HAVING count(*) >= 3 AND (lt.last_interaction IS NULL OR lt.last_interaction < now() - interval '90 days')
+            HAVING count(DISTINCT d.deal_id) >= 3 AND (lt.last_interaction IS NULL OR lt.last_interaction < now() - interval '90 days')
             ORDER BY volume DESC NULLS LAST, deal_count DESC
             LIMIT %s
         """, (limit,))
@@ -217,11 +210,11 @@ def create_interaction(body: InteractionCreate):
     if channel not in {"call", "email", "text", "meeting", "mail", "other"}:
         channel = "other"
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM entities WHERE entity_id=%s", (body.entity_id,))
+        cur.execute("SELECT 1 FROM sbi_entities WHERE entity_id=%s", (body.entity_id,))
         if not cur.fetchone():
             return {"error": "entity not found"}
         cur.execute("""
-            INSERT INTO interactions (entity_id, contact_id, user_id, channel, occurred_at, subject, notes, outcome)
+            INSERT INTO sbi_interactions (entity_id, contact_id, user_id, channel, occurred_at, subject, notes, outcome)
             VALUES (%s,%s,%s,%s,coalesce(%s::timestamptz, now()),%s,%s,%s)
             RETURNING interaction_id, entity_id, contact_id, user_id, channel, occurred_at, subject, notes, outcome
         """, (body.entity_id, body.contact_id, body.user_id, channel, body.occurred_at, body.subject, body.notes, body.outcome))
@@ -231,7 +224,7 @@ def create_interaction(body: InteractionCreate):
 @router.get("/scrapers/runs")
 def scrape_runs(limit: int = Query(50, ge=1, le=200)):
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT run_id, job, started_at, finished_at, status, stats, error FROM scrape_runs ORDER BY started_at DESC LIMIT %s", (limit,))
+        cur.execute("SELECT run_id, job, started_at, finished_at, status, stats, error FROM sbi_source_runs ORDER BY started_at DESC LIMIT %s", (limit,))
         return {"runs": rows(cur)}
 
 
@@ -239,11 +232,11 @@ def scrape_runs(limit: int = Query(50, ge=1, le=200)):
 def request_scrape(body: ScrapeRunRequest):
     allowed = {"traded_refresh", "acris_refresh", "crexi_refresh", "property_owner_refresh", "full_refresh"}
     job = body.job if body.job in allowed else "full_refresh"
-    payload = {"requested_by": body.user_id, "options": body.options or {}}
+    payload = {"requested_by": body.user_id, "requested_status": "requested", "options": body.options or {}}
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO scrape_runs (job, status, stats)
-            VALUES (%s, 'requested', %s)
+            INSERT INTO sbi_source_runs (source, job, status, stats)
+            VALUES ('manual', %s, 'running', %s::jsonb)
             RETURNING run_id, job, started_at, finished_at, status, stats, error
         """, (job, json.dumps(payload)))
         return {"run": rows(cur)[0]}
