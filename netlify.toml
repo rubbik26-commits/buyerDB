@@ -3,6 +3,14 @@
   command = "npm install && npm run build"
   publish = "dist"
 
+[build.environment]
+  VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  VITE_USE_SUPABASE_RPC = "true"
+
+[context.production.environment]
+  VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  VITE_USE_SUPABASE_RPC = "true"
+
 [functions]
   directory = "netlify/functions"
 
@@ -17,4 +25,4 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'"
+    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'
