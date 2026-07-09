@@ -6,6 +6,7 @@ Usage:
 
 This loader writes only to sbi_* base tables. It is intended for the Supabase RPC
 production mode where canonical names such as deals/properties/entities are views.
+It refuses to load over a non-empty sbi_deals table unless --reset is supplied.
 """
 import json
 import os
