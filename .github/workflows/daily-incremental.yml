@@ -1,11 +1,8 @@
 name: daily-incremental
 
-# LEGACY FALLBACK (decisions D-008/D-010): the live refresh is pg_cron ->
-# Supabase edge functions -> sync_upsert_deals(). This worker path stays as the
-# free curl_cffi transport fallback. The scheduled run is gated on the
-# ENABLE_LEGACY_WORKER repo variable so it doesn't burn a red run + failure
-# email every day while DATABASE_URL/SUPABASE_DB_URL is unset; workflow_dispatch always works.
-# Runs ~09:17 ET on an odd minute (GitHub cron is best-effort; :00 is the worst slot).
+# Primary scraper train from the blueprint:
+# traded discovery/fetch -> ACRIS fresh window -> Rolling Sales, all through the
+# proven Python modules and Postgres store layer. Netlify remains frontend only.
 on:
   schedule:
     - cron: "17 13 * * *"
@@ -15,11 +12,9 @@ concurrency:
   group: skyline-incremental
   cancel-in-progress: false
 
-# The keep-alive step pushes a commit; the default GITHUB_TOKEN is read-only.
 permissions:
   contents: write
 
-# The app lives under skyline/ in this repository.
 defaults:
   run:
     working-directory: skyline
@@ -27,12 +22,11 @@ defaults:
 jobs:
   incremental:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_LEGACY_WORKER == 'true'
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
       SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
-      SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}   # fallback transport only; curl_cffi is primary + free
+      SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +34,7 @@ jobs:
       - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add one under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard Connect button."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add the Supabase session-pooler connection string as a repository secret."
             exit 1
           fi
 
@@ -51,29 +45,41 @@ jobs:
       - name: Install worker deps
         run: pip install -r requirements.txt
 
-      # discovery − fetch ledger → amount/exclusion/class-gated merge → ledgers,
-      # against Postgres via worker/store.py. Covered by worker/test_run_incremental.py.
-      - name: Run incremental ingest (discovery − fetch ledger → gated merge → ledgers)
+      - name: Run traded incremental ingest
         run: python -m worker.run_incremental
 
-      # Fresh ACRIS deed window → Postgres. Ported onto store.merge_deal +
-      # store.apply_acris_party_fill (amount gate). Covered by worker/test_phase3_fresh.py.
-      - name: Fresh ACRIS window (masters → detail → pluto → build → gated merge)
+      - name: Run ACRIS fresh window ingest
         run: python -m worker.phase3_fresh
 
-      # Rolling Sales sqft/units fill (agreement-gated, never overwrite, >20% → review,
-      # rolling_ledger dedupe). Covered by worker/test_rolling_sales.py.
-      - name: Rolling Sales batch (sqft/units fill)
+      - name: Run Rolling Sales sqft/units enrichment
         run: python -m worker.rolling_sales --batch 400
 
-      - name: Keep-alive commit (defeats the 60-day schedule auto-disable)
+      - name: Verify live invariants after refresh
+        working-directory: ..
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          conn = psycopg.connect(os.environ['DATABASE_URL'])
+          checks = {
+            'duplicate_property_price_date': "select count(*) from (select property_id,sale_price,sale_date,count(*) from sbi_deals group by property_id,sale_price,sale_date having count(*)>1) x",
+            'acris_parties_without_gate': "select count(*) from sbi_deal_parties dp join sbi_deals d using(deal_id) where dp.source_system='acris' and dp.role in ('buyer','seller') and coalesce(dp.amount_gate_passed,false) is not true",
+            'banned_asset_rows': "select count(*) from sbi_deals where asset_type in ('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')"
+          }
+          with conn, conn.cursor() as cur:
+            for name, sql in checks.items():
+              cur.execute(sql)
+              n = cur.fetchone()[0]
+              print(name, n)
+              if n:
+                raise SystemExit(f'{name} failed: {n}')
+          PY
+
+      - name: Keep-alive commit
         run: |
           git config user.name "skyline-bot"
           git config user.email "bot@skyline.local"
           date -u +"%Y-%m-%dT%H:%M:%SZ" > .last_incremental_run
           git add .last_incremental_run
-          # commit only when there is a staged change; a clean tree is an expected
-          # no-op (not an error). A real push failure is NOT masked — it fails the job.
           if git diff --staged --quiet; then
             echo "keep-alive: nothing to commit"
           else
@@ -85,7 +91,5 @@ jobs:
         if: failure()
         run: |
           if [ -n "$ALERT_WEBHOOK_URL" ]; then
-            curl -s -X POST "$ALERT_WEBHOOK_URL" \
-              -H 'Content-Type: application/json' \
-              -d "{\"text\":\"Skyline daily-incremental FAILED: run ${{ github.run_id }}\"}" || true
+            curl -s -X POST "$ALERT_WEBHOOK_URL" -H 'Content-Type: application/json' -d "{\"text\":\"Skyline daily-incremental FAILED: run ${{ github.run_id }}\"}" || true
           fi
