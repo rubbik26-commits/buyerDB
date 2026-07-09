@@ -1,4 +1,4 @@
-# SOP — Deployment links (updated 2026-07-07 for D-008/D-010)
+# SOP — Deployment links (updated 2026-07-09 for repository consolidation)
 
 **Goal:** every link in the Payload (CLAUDE.md → Output shape) green.
 **Verify at any time:** `bash execution/probe_links.sh` (credential-free links) +
@@ -13,7 +13,14 @@ Actions run list (legacy fallback only).
 > required for the daily refresh to work. See `SOP-daily-refresh.md` — that file
 > is the source of truth for the live pipeline.
 
-## Current live topology (verified 2026-07-06)
+> **Repository consolidation notice (2026-07-09).** The production Netlify
+> project is named `buyerdb`, but deploy metadata showed it was still linked to
+> `rubbik26-commits/buyers` on branch `ACRIS` at commit
+> `1d3c6fe2c1ae8398a87cdabc2959ee4ee5f6e7a1`. The consolidated source of truth
+> is now `rubbik26-commits/buyerDB`. Netlify must be relinked to `buyerDB` while
+> preserving the existing build settings below.
+
+## Current live topology
 
 ```
 pg_cron (Supabase) ─▶ edge functions (acris-v2, traded-daily, …) ─▶ sync_upsert_deals()
@@ -28,7 +35,21 @@ Optional / legacy:
   GitHub Pages mirror ── deploy-frontend.yml publishes a fallback copy of the bundle
 ```
 
-## Optional link 1 — legacy worker `DATABASE_URL` secret (only if the fallback is wanted)
+## Required link 1 — Netlify Git source must point at buyerDB
+
+The Netlify site **buyerdb** should deploy from the consolidated repo:
+
+- Repository: `rubbik26-commits/buyerDB`
+- Branch: `ACRIS`
+- Build base: `skyline/frontend`
+- Build command: `npm install && npm run build`
+- Publish directory: `dist`
+- Production URL: `https://buyerdb.netlify.app`
+
+After relinking, run a production deploy and confirm the deploy metadata commit
+URL points to `rubbik26-commits/buyerDB`, not `rubbik26-commits/buyers`.
+
+## Optional link 2 — legacy worker `DATABASE_URL` secret (only if the fallback is wanted)
 
 Enable only if the free curl_cffi scraper fallback is needed (e.g. ScraperAPI
 credits exhausted — see the 2026-07-06 finding in `memory/progress.md`):
@@ -45,7 +66,7 @@ credits exhausted — see the 2026-07-06 finding in `memory/progress.md`):
    `ALERT_WEBHOOK_URL` (failure pings), `SCRAPERAPI_KEY` (scraper fallback).
 5. Verify: Actions tab → `daily-incremental` → **Run workflow** → must end green.
 
-## Optional link 2 — FastAPI backend on Render (enables uploads / merges / AI Deal Desk)
+## Optional link 3 — FastAPI backend on Render (enables uploads / merges / AI Deal Desk)
 
 1. render.com → **New → Blueprint** → connect `rubbik26-commits/buyerDB`.
    `render.yaml` at repo root defines service `skyline-api` (free plan, Python 3.12,
