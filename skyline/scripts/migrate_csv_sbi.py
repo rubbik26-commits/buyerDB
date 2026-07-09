@@ -6,7 +6,9 @@ Usage:
 
 This loader writes only to sbi_* base tables. It is intended for the Supabase RPC
 production mode where canonical names such as deals/properties/entities are views.
-It refuses to load over a non-empty sbi_deals table unless --reset is supplied.
+The default mode is idempotent: it upserts rows and can safely run against a
+partially loaded database. Use --reset only when an intentional full wipe/reload
+is desired.
 """
 import json
 import os
@@ -137,8 +139,7 @@ def main(csv_path, exclusions_path=None, reset=False):
         cur.execute("select count(*) from sbi_deals")
         existing = cur.fetchone()[0]
         if existing:
-            conn.close()
-            raise SystemExit(f"ABORT: sbi_deals already has {existing} rows. Use --reset only when you intentionally want to reload.")
+            print(json.dumps({"mode": "upsert", "existing_sbi_deals": existing}))
 
     prop_ids = {}
     for _, row in df.iterrows():
