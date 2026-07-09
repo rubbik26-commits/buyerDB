@@ -4,7 +4,7 @@ name: daily-incremental
 # Supabase edge functions -> sync_upsert_deals(). This worker path stays as the
 # free curl_cffi transport fallback. The scheduled run is gated on the
 # ENABLE_LEGACY_WORKER repo variable so it doesn't burn a red run + failure
-# email every day while DATABASE_URL is unset; workflow_dispatch always works.
+# email every day while DATABASE_URL/SUPABASE_DB_URL is unset; workflow_dispatch always works.
 # Runs ~09:17 ET on an odd minute (GitHub cron is best-effort; :00 is the worst slot).
 on:
   schedule:
@@ -30,17 +30,17 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.ENABLE_LEGACY_WORKER == 'true'
     timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
       SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}   # fallback transport only; curl_cffi is primary + free
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require DATABASE_URL secret
+      - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::The DATABASE_URL repo secret is not set. Add it under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard (Connect button) — the direct db.*.supabase.co host is IPv6-only and unreachable from Actions runners."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add one under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard Connect button."
             exit 1
           fi
 
