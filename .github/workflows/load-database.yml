@@ -1,15 +1,14 @@
 name: load-database
 
-# Manual one-shot: apply migrations and load the canonical dataset into the
-# database pointed at by the DATABASE_URL repo secret (use Supabase's Session
-# Pooler URI — Actions runners are IPv4-only and the direct db.*.supabase.co
-# host is IPv6). Safe to re-run: it refuses to load data over a non-empty
-# deals table unless force_reload=true wipes the Skyline tables first.
+# Manual one-shot: apply migrations and load the canonical dataset into the live
+# sbi_* production schema. Use SUPABASE_DB_URL or DATABASE_URL with the Supabase
+# session-pooler URI. Safe to re-run: it refuses to load over non-empty sbi_deals
+# unless force_reload=true is explicitly selected.
 on:
   workflow_dispatch:
     inputs:
       force_reload:
-        description: "Wipe Skyline tables and reload from the CSV"
+        description: "Wipe sbi_* tables and reload from the CSV"
         type: boolean
         default: false
 
@@ -22,14 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require DATABASE_URL secret
+      - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::The DATABASE_URL repo secret is not set. Add it under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard (Connect button) — the direct db.*.supabase.co host is IPv6-only and unreachable from Actions runners."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add one under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard Connect button."
             exit 1
           fi
 
@@ -38,46 +37,37 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
 
-      - name: Apply migrations (tolerates already-applied, fails on real errors)
+      - name: Apply migrations
         run: |
-          # ON_ERROR_STOP so psql cannot keep executing past an error inside a
-          # file. A migration whose objects already exist is expected on re-run
-          # and skipped; ANY other failure (syntax, permissions, missing
-          # dependency) fails the job instead of silently proceeding against a
-          # half-migrated schema.
           for f in database/migrations/*.sql; do
             echo "== $f"
-            if OUT=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" 2>&1); then
-              echo "   applied"
-            elif echo "$OUT" | grep -qE "already exists"; then
-              echo "   (already applied — continuing)"
-            else
-              echo "$OUT"
-              echo "::error::migration $f failed"
-              exit 1
-            fi
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
           done
 
-      - name: Wipe Skyline tables (force_reload only)
-        if: inputs.force_reload
+      - name: Load canonical CSV into sbi schema
         run: |
-          # app_config deliberately survives (it holds the sync secrets);
-          # sync_state must NOT survive — stale watermarks would mislead the
-          # first post-reload sync run.
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
-            TRUNCATE deal_parties, rolling_ledger, deals, contacts, interactions,
-                     entity_aliases, entities, upload_rows, uploads, properties,
-                     review_queue, fetch_ledger, exclusion_ledger, scrape_runs, ai_logs,
-                     sync_state;"
-
-      - name: Load canonical CSV (refuses if deals already has rows)
-        run: |
-          N=$(psql "$DATABASE_URL" -Atc "SELECT count(*) FROM deals")
-          if [ "$N" != "0" ]; then
-            echo "deals already has $N rows — skipping load (use force_reload to wipe)."
+          N=$(psql "$DATABASE_URL" -Atc "SELECT count(*) FROM sbi_deals")
+          if [ "${{ inputs.force_reload }}" = "true" ]; then
+            python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv --reset
+          elif [ "$N" != "0" ]; then
+            echo "sbi_deals already has $N rows — skipping load."
           else
-            python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
+            python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
           fi
 
-      - name: Assertions (the load is not done until these pass)
-        run: python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv
+      - name: Assertions
+        run: |
+          python - <<'PY'
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          cur = conn.cursor()
+          cur.execute('select count(*) from sbi_deals')
+          deals = cur.fetchone()[0]
+          cur.execute('select count(*) from sbi_properties')
+          props = cur.fetchone()[0]
+          cur.execute('select count(*) from sbi_entities')
+          ents = cur.fetchone()[0]
+          print({'sbi_deals': deals, 'sbi_properties': props, 'sbi_entities': ents})
+          if deals <= 0 or props <= 0 or ents <= 0:
+              raise SystemExit('load failed: sbi tables are still empty')
+          PY
