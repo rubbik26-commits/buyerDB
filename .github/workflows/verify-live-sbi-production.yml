@@ -1,0 +1,53 @@
+name: verify-live-sbi-production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type VERIFY_LIVE_SBI to run live Supabase SBI integrity checks"
+        required: true
+        type: string
+
+concurrency:
+  group: verify-live-sbi-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://pdvyuepsdnpxctmagdcq.supabase.co' }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+    steps:
+      - name: Confirm verification window
+        run: |
+          if [ "${{ inputs.confirm }}" != "VERIFY_LIVE_SBI" ]; then
+            echo "::error::Confirmation text mismatch."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Require live database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Missing SUPABASE_DB_URL or DATABASE_URL. Add the Supabase session-pooler connection string as a repository secret."
+            exit 1
+          fi
+          if [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::Missing SUPABASE_ANON_KEY."
+            exit 1
+          fi
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Verify live SBI schema, data, invariants, and RPC contract
+        run: bash execution/verify_live_sbi.sh
