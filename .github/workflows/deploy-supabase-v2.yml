@@ -1,0 +1,142 @@
+name: deploy-supabase-v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type DEPLOY_009_EDGE_V2 to apply 009_hardening and deploy the six staged edge functions"
+        required: true
+        type: string
+      run_sync_verification:
+        description: "Invoke skyline-sync twice after deploy and verify idempotency"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: deploy-supabase-v2-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF || 'hvsvxjdwfbsqaqlmuwlt' }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://hvsvxjdwfbsqaqlmuwlt.supabase.co' }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
+    steps:
+      - name: Confirm production deploy window
+        run: |
+          if [ "${{ inputs.confirm }}" != "DEPLOY_009_EDGE_V2" ]; then
+            echo "::error::Confirmation text mismatch."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Require production secrets
+        run: |
+          missing=0
+          for k in SUPABASE_ACCESS_TOKEN DATABASE_URL SUPABASE_ANON_KEY; do
+            if [ -z "${!k}" ]; then echo "::error::Missing required secret/env: $k"; missing=1; fi
+          done
+          if [ "${{ inputs.run_sync_verification }}" = "true" ] && [ -z "$SYNC_SECRET" ]; then
+            echo "::error::Missing SYNC_SECRET for skyline-sync verification."
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Preflight current health
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "select api_health();"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "select count(*) as deals_before from deals;"
+
+      - name: Apply 009_hardening
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f skyline/database/migrations/009_hardening.sql
+
+      - name: Verify 009 hardening landed
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X <<'SQL'
+          select
+            pg_get_functiondef('sync_upsert_deals(jsonb)'::regprocedure) like '%conflicts_flagged%' as sync_v3_has_conflict_counter,
+            pg_get_functiondef('sync_upsert_deals(jsonb)'::regprocedure) like '%pg_advisory_xact_lock%' as sync_v3_has_lock,
+            pg_get_functiondef('sync_upsert_deals(jsonb)'::regprocedure) like '%deed_amount%' as sync_v3_has_deed_amount_gate;
+          select has_function_privilege('anon', 'api_review_act(uuid,text,text)', 'EXECUTE') as anon_can_review_act_should_be_false;
+          SQL
+
+      - name: Deploy staged Supabase edge functions verbatim
+        working-directory: skyline
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ env.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy acris-v2      --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy traded-daily  --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy crexi-run     --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy crexi-ingest  --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy dos-enrich    --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy skyline-sync  --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+
+      - name: Verify site-facing RPC health
+        run: |
+          curl -fsS -X POST "$SUPABASE_URL/rest/v1/rpc/api_health" \
+            -H 'Content-Type: application/json' \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -d '{}'
+          echo
+
+      - name: Invoke skyline-sync twice and verify idempotency
+        if: ${{ inputs.run_sync_verification }}
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST "$SUPABASE_URL/functions/v1/skyline-sync" \
+            -H 'Content-Type: application/json' \
+            -d "{\"secret\":\"${SYNC_SECRET}\"}" | tee /tmp/skyline-sync-1.json
+          echo
+          curl -fsS -X POST "$SUPABASE_URL/functions/v1/skyline-sync" \
+            -H 'Content-Type: application/json' \
+            -d "{\"secret\":\"${SYNC_SECRET}\"}" | tee /tmp/skyline-sync-2.json
+          echo
+          python - <<'PY'
+          import json
+          p1=json.load(open('/tmp/skyline-sync-1.json'))
+          p2=json.load(open('/tmp/skyline-sync-2.json'))
+          print({'first': p1, 'second': p2})
+          if not p1.get('ok') or p1.get('errors', 0):
+              raise SystemExit('first skyline-sync run was not clean')
+          if not p2.get('ok') or p2.get('errors', 0):
+              raise SystemExit('second skyline-sync run was not clean')
+          if int(p2.get('inserted', 0) or 0) != 0:
+              raise SystemExit('skyline-sync second run is not idempotent')
+          PY
+
+      - name: Verify duplicate groups and cron state
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X <<'SQL'
+          select count(*) as deals_after from deals;
+          select count(*) as duplicate_property_price_date_groups
+          from (
+            select property_id, sale_price, sale_date, count(*)
+            from deals
+            group by property_id, sale_price, sale_date
+            having count(*) > 1
+          ) dups;
+          select jobname, schedule, active from cron.job order by jobname;
+          SQL
