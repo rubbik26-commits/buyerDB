@@ -376,16 +376,17 @@ def apply_acris_party_fill(
 
 # ── rolling ledger via sbi_fetch_ledger ──────────────────────────────────────
 def rolling_not_done(conn, deal_ids: Iterable[Any]):
-    deal_ids = [str(d) for d in (deal_ids or [])]
-    if not deal_ids:
+    original = list(deal_ids or [])
+    keys = [str(d) for d in original]
+    if not keys:
         return []
     with conn.cursor() as cur:
         cur.execute(
             "select source_key from sbi_fetch_ledger where source='rolling' and source_key = any(%s)",
-            (deal_ids,),
+            (keys,),
         )
         done = {str(r[0]) for r in cur.fetchall()}
-    return [d for d in deal_ids if str(d) not in done]
+    return [d for d in original if str(d) not in done]
 
 
 def mark_rolling_done(conn, deal_id):
