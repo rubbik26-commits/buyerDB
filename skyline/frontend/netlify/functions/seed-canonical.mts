@@ -1,6 +1,7 @@
 import type { Config } from "@netlify/functions";
 
 type Row = Record<string, string>;
+// Fetches the canonical repo CSV at runtime so production can be seeded without a local checkout.
 const RAW_CSV = "https://raw.githubusercontent.com/rubbik26-commits/buyerDB/ACRIS/skyline/NEW_YORK_CLOSED_ENRICHED_v8.csv";
 const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data, null, 2), { status, headers: { "content-type": "application/json" } });
