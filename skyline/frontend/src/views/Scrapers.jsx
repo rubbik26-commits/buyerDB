@@ -3,11 +3,11 @@ import { api, shortDate } from "../api/client.js";
 import { Empty, ErrorBanner, Loading, Pill } from "../components/ui.jsx";
 
 const JOBS = [
-  { id: "traded_refresh", label: "Traded refresh", note: "Refresh commercial sale pages and merge into canonical deals." },
-  { id: "acris_refresh", label: "ACRIS refresh", note: "Refresh deed-backed NYC sales with amount-gate protection." },
-  { id: "crexi_refresh", label: "Crexi refresh", note: "Refresh public listing/deal intelligence where configured." },
-  { id: "property_owner_refresh", label: "Owner/contact refresh", note: "Re-run owner/contact gap enrichment workflow." },
-  { id: "full_refresh", label: "Full refresh", note: "Queue every configured ingestion source." },
+  { id: "traded_refresh", label: "Traded refresh", note: "Runs the live traded-daily Supabase edge scraper and merges qualified deals." },
+  { id: "acris_refresh", label: "ACRIS refresh", note: "Runs the live acris-v2 deed scraper with amount-gate protection." },
+  { id: "crexi_refresh", label: "Crexi refresh", note: "Starts the Crexi actor, then ingests the latest Apify dataset into review-gated deal intelligence." },
+  { id: "property_owner_refresh", label: "Owner/contact refresh", note: "Runs the live DOS enrichment path for owner/contact gap cleanup." },
+  { id: "full_refresh", label: "Full refresh", note: "Runs ACRIS, Traded, Crexi, and owner/contact enrichment in sequence." },
 ];
 
 export default function Scrapers() {
@@ -16,6 +16,7 @@ export default function Scrapers() {
   const [loading, setLoading] = useState(true);
   const [job, setJob] = useState("traded_refresh");
   const [requesting, setRequesting] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -34,9 +35,11 @@ export default function Scrapers() {
   async function requestRun() {
     setRequesting(true);
     setErr(null);
+    setLastResult(null);
     try {
       const res = await api.requestScrape({ job, user_id: "broker", options: { requested_from: "scraper_operations_ui" } });
       if (res?.error) throw new Error(res.error);
+      setLastResult(res);
       load();
     } catch (e) {
       setErr(e);
@@ -49,22 +52,23 @@ export default function Scrapers() {
     <div className="content">
       <div className="view-head">
         <div className="eyebrow">Ingestion operations</div>
-        <h1>Scrapers & scheduled refresh</h1>
+        <h1>Live scrapers & scheduled refresh</h1>
         <p>
           A broker-facing control room for Traded, ACRIS, Crexi, owner/contact refresh,
-          and full database refresh jobs. Manual requests are logged into scrape_runs for
-          the worker/scheduler to claim instead of pretending a long scraper ran in the browser.
+          and full database refresh jobs. Manual runs now invoke the live Supabase edge
+          scrapers through Netlify instead of only logging a request for a separate worker.
         </p>
       </div>
 
       <ErrorBanner error={err} />
+      {lastResult && <div className="banner ok">Last run: <strong>{lastResult.job}</strong> finished with status <strong>{lastResult.status}</strong>{lastResult.run_id ? <> · run <code>{lastResult.run_id}</code></> : null}</div>}
 
       <div className="workgrid two" style={{ marginBottom: 18 }}>
         <section className="panel">
           <div className="panelhead">
             <div>
-              <h2>Request a refresh</h2>
-              <p>Creates a durable run request that the backend worker can execute and audit.</p>
+              <h2>Run scraper now</h2>
+              <p>Executes the selected live scraper path and records status/stats back to the run ledger.</p>
             </div>
           </div>
           <div className="panelbody">
@@ -76,7 +80,7 @@ export default function Scrapers() {
                 </select>
               </div>
               <div className="spacer" />
-              <button className="btn brass" disabled={requesting} onClick={requestRun}>{requesting ? "Requesting…" : "Request run"}</button>
+              <button className="btn brass" disabled={requesting} onClick={requestRun}>{requesting ? "Running…" : "Run live scraper"}</button>
             </div>
             <div className="scraper-notes">
               {JOBS.map((j) => (
@@ -106,7 +110,7 @@ export default function Scrapers() {
       </div>
 
       {loading && !runs ? <Loading label="Loading scraper runs…" /> : null}
-      {runs && runs.length === 0 ? <Empty title="No scraper runs yet." hint="Request a refresh to create the first run row." /> : null}
+      {runs && runs.length === 0 ? <Empty title="No scraper runs yet." hint="Run a live scraper to create the first run row." /> : null}
 
       {runs && runs.length > 0 && (
         <div className="tablewrap">
