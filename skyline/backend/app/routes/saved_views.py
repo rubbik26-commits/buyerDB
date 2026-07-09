@@ -1,10 +1,8 @@
 """Saved views API for filters/sorts across workflow surfaces."""
 import json
 from typing import Optional
-
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-
 from ..db import db, rows
 
 router = APIRouter(prefix="/api/saved-views")
@@ -28,7 +26,7 @@ def list_views(user_id: str = "broker", surface: Optional[str] = None):
     with db() as conn, conn.cursor() as cur:
         cur.execute(f"""
             SELECT view_id, user_id, name, surface, filters, sort, created_at, updated_at
-            FROM saved_views
+            FROM sbi_saved_views
             WHERE {' AND '.join(where)}
             ORDER BY surface, updated_at DESC
         """, params)
@@ -44,8 +42,8 @@ def upsert_view(body: SavedViewUpsert):
         return {"error": "saved-view name is required"}
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO saved_views (user_id, name, surface, filters, sort)
-            VALUES (%s,%s,%s,%s,%s)
+            INSERT INTO sbi_saved_views (user_id, name, surface, filters, sort)
+            VALUES (%s,%s,%s,%s::jsonb,%s::jsonb)
             ON CONFLICT (user_id, surface, name)
             DO UPDATE SET filters=EXCLUDED.filters, sort=EXCLUDED.sort, updated_at=now()
             RETURNING view_id, user_id, name, surface, filters, sort, created_at, updated_at
@@ -56,6 +54,6 @@ def upsert_view(body: SavedViewUpsert):
 @router.delete("/{view_id}")
 def delete_view(view_id: str, user_id: str = "broker"):
     with db() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM saved_views WHERE view_id=%s AND user_id=%s RETURNING view_id", (view_id, user_id))
+        cur.execute("DELETE FROM sbi_saved_views WHERE view_id=%s AND user_id=%s RETURNING view_id", (view_id, user_id))
         deleted = cur.fetchone()
     return {"deleted": bool(deleted), "view_id": view_id}
