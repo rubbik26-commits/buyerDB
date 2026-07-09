@@ -1,11 +1,13 @@
-create or replace function public.api_saved_views(user_id text default 'broker', surface text default null)
+drop function if exists public.api_saved_views(text,text);
+
+create function public.api_saved_views(p_user_id text default 'broker', p_surface text default null)
 returns jsonb
 language sql stable security definer set search_path=public as $$
   select jsonb_build_object('views', coalesce((
     select jsonb_agg(to_jsonb(v) order by v.surface, v.updated_at desc nulls last)
     from public.sbi_saved_views v
-    where v.user_id = coalesce(api_saved_views.user_id, 'broker')
-      and (api_saved_views.surface is null or api_saved_views.surface = '' or v.surface = api_saved_views.surface)
+    where v.user_id = coalesce(p_user_id, 'broker')
+      and (p_surface is null or p_surface = '' or v.surface = p_surface)
   ), '[]'::jsonb));
 $$;
 
