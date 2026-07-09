@@ -1,3 +1,7 @@
+alter table public.sbi_source_runs drop constraint if exists sbi_source_runs_status_check;
+alter table public.sbi_source_runs add constraint sbi_source_runs_status_check
+  check (status in ('requested','running','completed','failed','timeout','quota_blocked','completed_with_errors'));
+
 create or replace function public.api_request_scrape(job text, user_id text default 'broker', options jsonb default '{}'::jsonb)
 returns jsonb
 language plpgsql volatile security definer set search_path=public as $$
