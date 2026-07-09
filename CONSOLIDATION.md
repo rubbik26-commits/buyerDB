@@ -28,45 +28,70 @@ The target `buyerDB` repo keeps that core functionality and extends it:
 - Netlify builds from `skyline/frontend` using the root `netlify.toml`.
 - Frontend is expanded beyond the original tabs to include Workbench, Properties, Map, Outreach, Tasks, Scrapers, and Audit.
 - Live data mode supports Supabase PostgREST/RPC functions for the static Netlify deployment.
+- Netlify Functions provide the non-RPC API surface: `agent`, `core-routes`, `seed-canonical`, and `workflow`.
 - Supabase edge functions and SQL migrations support the live refresh path.
 - FastAPI remains available as the optional full backend for uploads, merges, and AI Deal Desk workflows.
 - GitHub Actions worker jobs remain as a legacy/fallback path.
 
-## Current Netlify issue found during consolidation
+## Current Netlify status verified during consolidation
 
-The Netlify project named `buyerdb` is live and healthy, but its current deploy metadata shows that production is still deploying from:
+The Netlify project named `buyerdb` is live and healthy.
 
-- Repository: `rubbik26-commits/buyers`
+Current production deploy metadata shows:
+
+- Site ID: `e1780534-ba0b-470e-b98f-85b29f7d32a1`
+- Project name: `buyerdb`
+- Primary URL: `https://buyerdb.netlify.app`
+- Branch deploy URL: `https://acris--buyerdb.netlify.app`
+- Current deploy ID: `6a4ff5a984824e0008db3fae`
+- Deploy state: `ready`
 - Branch: `ACRIS`
-- Commit: `1d3c6fe2c1ae8398a87cdabc2959ee4ee5f6e7a1`
-- Deploy ID: `6a4f8f0026471d8cd84bd500`
+- Commit URL: `https://github.com/rubbik26-commits/buyerDB/commit/9114c068dbc59031e4bd32e620ad0ab0d3f77867`
+- Framework: `vite`
+- Functions deployed: `agent`, `core-routes`, `seed-canonical`, `workflow`
 
-That means Netlify is not yet using the consolidated source-of-truth repo, even though `buyerDB` already has the deploy-ready `netlify.toml`.
+That confirms Netlify is now deploying from the consolidated `buyerDB` repository, not the old `buyers` repository.
 
-## Required Netlify correction
+## Netlify build contract
 
-In Netlify project `buyerdb`, the linked Git repository must be changed from:
+Netlify must remain linked to:
 
-`rubbik26-commits/buyers`
+- Repository: `rubbik26-commits/buyerDB`
+- Branch: `ACRIS`
+- Build base: `skyline/frontend`
+- Build command: `npm install && npm run build`
+- Publish directory: `dist`
 
-To:
-
-`rubbik26-commits/buyerDB`
-
-Use branch:
-
-`ACRIS`
-
-Build settings must remain:
+Root `netlify.toml` contains the deploy contract:
 
 ```toml
 [build]
   base = "skyline/frontend"
   command = "npm install && npm run build"
   publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
 ```
 
-After relinking, trigger a production deploy and verify the deploy commit URL points to `rubbik26-commits/buyerDB`, not `rubbik26-commits/buyers`.
+## Merge decisions made in this pass
+
+The active `buyerDB` implementation is newer than the legacy `buyers` repo in several production-critical areas: it has the nested `skyline/` layout, Supabase RPC/static Netlify support, CSV fallback for Netlify API routes, Map support, seed-canonical function, Supabase edge functions, and later migrations.
+
+Therefore the merge direction is:
+
+1. Keep `buyerDB` as the canonical deployable app.
+2. Do not overwrite newer `buyerDB` files with older `buyers` files.
+3. Pull forward useful legacy improvements from `buyers` where they are missing in `buyerDB`.
+4. Preserve Netlify production compatibility.
+
+Implemented merge items:
+
+- Frontend shell resilience from `buyers`: the app now keeps the dashboard shell open and uses empty metadata if `/api/meta` fails instead of leaving the active view unloaded.
+- Frontend navigation polish from `buyers`: tab buttons now include titles and consistent display behavior, while preserving the newer `buyerDB` Map tab.
+- API client compatibility from `buyers`: added `savedViews`, `saveView`, and `deleteView` helpers to the non-RPC API client path.
+- CSV upload mapping from `buyers`: expanded column aliases for contacts, deals, buyer/seller fields, dates, borough, market, sale price, units, square footage, source URL, and shortcode.
+- Netlify-local request safety from `buyers`: POST and DELETE helpers now resolve through the same `apiUrl()` path logic used by GET requests.
 
 ## Repository operating rule going forward
 
@@ -80,7 +105,7 @@ The old `buyers` repository should not receive new product work unless it is int
 
 Before considering the consolidation complete:
 
-1. Netlify project `buyerdb` is relinked to `rubbik26-commits/buyerDB`.
+1. Netlify project `buyerdb` remains linked to `rubbik26-commits/buyerDB`.
 2. Production branch is `ACRIS`.
 3. Netlify build base is `skyline/frontend`.
 4. Netlify build command is `npm install && npm run build`.
@@ -88,3 +113,4 @@ Before considering the consolidation complete:
 6. Production deploy URL is `https://buyerdb.netlify.app`.
 7. Deploy metadata commit URL points to `rubbik26-commits/buyerDB`.
 8. The site loads the expanded `buyerDB` application shell with Workbench, Properties, Map, Outreach, Tasks, Scrapers, Audit, Deals, Buyers, Leaderboards, Deal Desk, Contacts, and Review.
+9. `/api/health`, `/api/meta`, `/api/deals`, `/api/buyers`, `/api/leaderboards`, `/api/agent`, and workflow routes continue responding after merge.
