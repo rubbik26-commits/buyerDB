@@ -1,121 +1,95 @@
-# SOP — Daily data refresh (the REAL architecture, verified 2026-07-06)
+# SOP — Daily data refresh / live SBI production state
 
-**Goal:** buyerdb.netlify.app always shows yesterday's new NYC CRE deals without
-anyone touching anything.
+**Goal:** `buyerdb.netlify.app` shows the live Skyline Buyer Intelligence dataset from Supabase without mock data, browser scrapers, or Base44 as the canonical app database.
 
-> **2026-07-07 update (maintenance pass).** The edge-function sources in
-> `skyline/supabase/functions/` were reviewed and rewritten: fail-closed auth, a
-> shared `_shared/mod.ts` module (one address normalizer, one config loader),
-> and honest failure reporting. `sync_upsert_deals` was hardened in
-> **`009_hardening.sql` (STAGED, not yet applied)** — it now verifies the amount
-> gate from an explicit `deed_amount` (acris-v2 sends it), flags conflicts to
-> `review_queue`, and takes an advisory lock. **Deploy in one window:** apply
-> 009, then deploy the six function sources, then verify one skyline-sync run.
-> The prod cutover state below is unchanged by that staging.
+## Current verified production project
 
-## ⚡ 2026-07-06 (late): Base44 removal in progress — cutover state
+- Supabase project: `pdvyuepsdnpxctmagdcq`
+- Frontend: Netlify project `buyerdb`
+- Frontend runtime: Supabase RPC mode through public `api_*` functions
+- Canonical tables: `sbi_properties`, `sbi_deals`, `sbi_deal_parties`, `sbi_entities`, `sbi_contacts`, `sbi_review_queue`, `sbi_source_runs`
+- Live RPC health returns runtime `supabase-rpc-sbi`
 
-User directive: Base44 is NOT part of this system. Cutover to direct
-Supabase writes, status:
+## Current flow
 
-| Piece | State |
-|---|---|
-| Base44 Contact enrichment (phones/emails/key persons/mailing) | ✅ HARVESTED into Supabase: 1,521 contacts + 4,457 entity mailing addresses (migration 007) |
-| acris-v2 | ✅ REWRITTEN + deployed + tested: writes via `sync_upsert_deals()`, secret from app_config |
-| traded-daily | ✅ REWRITTEN + deployed + tested: dedupe reads Supabase shortcodes; `body.maxFetches` caps spend |
-| crexi-ingest / crexi-run / dos-enrich | 🟡 REWRITES STAGED in `skyline/supabase/functions/` — deploy blocked by an MCP tool-approval prompt; deploy verbatim when cleared |
-| pipeline-reconcile, llm-enrich | 🟡 still scheduled — retire (cron.unschedule jobs 4, 8) ONLY after crexi-ingest rewrite is live |
-| skyline-sync (Base44→Supabase bridge, job 9) | 🟡 KEEP until crexi-ingest rewrite is live (it still ferries crexi/Base44 output); then unschedule + delete function |
-| ScraperAPI | ❌ 0 credits left (6,869/1,000 used; resets ~Jul 24) — traded.co discovery silently returns 0 until reset/upgrade, or re-arm the free curl_cffi GitHub-Actions worker |
-| llm-enrich replacement | ⏸ parked — it used Base44's InvokeLLM (web-grounded Gemini). Needs an AI provider key (Phase B: none supplied yet) to rebuild off-Base44 |
+```text
+buyerdb.netlify.app
+  -> Supabase PostgREST RPC api_* functions
+  -> sbi_* canonical tables
 
-Decommission checklist (in order): deploy 3 staged functions → invoke each once,
-verify `errors:0` → `SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname IN
-('dealflow-reconcile-daily','dealflow-llm-enrich-daily','skyline-sync-daily')` →
-delete functions skyline-sync, pipeline-reconcile, llm-enrich, acris-daily,
-acris-window, traded-fetch-probe → rotate the Base44 API key (it is burned into
-old function versions) → Base44 app becomes an archive.
-
-## How data actually flows (target architecture after cutover)
-
-```
-pg_cron (Supabase)                              all times UTC
-  05:00/05:50 Sun  crexi-run / crexi-ingest ─┐
-  06:00  acris-v2 (deed pulls, class gates)  ├─▶  sync_upsert_deals()  ─▶ deals/
-  06:12  traded-daily                        │    (single invariant     properties/
-  06:50  dos-enrich (NYS registry)          ─┘     write path in SQL)   entities/
-                                                                        deal_parties/
-                                                                        contacts
-                                              │ PostgREST RPC (api_*, anon key, RLS)
-                                              ▼
-                                     buyerdb.netlify.app
+Manual Scrapers tab
+  -> api_request_scrape(job, user_id, options)
+  -> sbi_source_runs row with status='requested'
+  -> worker / operator process claims or executes the requested job
 ```
 
-## Legacy data flow (pre-cutover, for reference)
+Netlify is only the static app/control panel. It does not run scrapers.
 
+## Current known production facts
+
+Verified against live Supabase on 2026-07-09:
+
+- `api_health()` returns `status='ok'`, `runtime='supabase-rpc-sbi'`, `deals=4075`.
+- `api_deals(per_page=>5)` returns 5 sample rows.
+- `api_buyers(lim=>5)` returns 5 sample rows.
+- `api_saved_views('broker','deals')` returns a valid empty list when no saved views exist.
+- Duplicate `(property_id, sale_price, sale_date)` groups: `0`.
+- ACRIS buyer/seller parties without the amount gate: `0`.
+- Banned residential asset rows: `0`.
+- Running scraper rows older than 1 hour: `0`.
+
+## Required gates
+
+The system remains governed by these non-negotiable rules:
+
+1. Condos, co-ops, single-family, two-family, and 1–2 family rows are not allowed into the commercial deal ledger.
+2. ACRIS buyer/seller party attachment must remain amount-gated.
+3. Duplicate transaction rows must not be created for the same property/price/date group.
+4. Source system, source URL, parse status, review status, and run status must stay visible.
+5. Contacts are stored only from real source rows or uploads; the AI layer must not invent phone numbers or emails.
+6. Netlify must remain the frontend/control panel, not the scraper runtime.
+
+## Manual request behavior
+
+`api_request_scrape()` now writes a durable queue row:
+
+```sql
+insert into sbi_source_runs(source, job, status, stats)
+values ('manual', <job>, 'requested', ...)
 ```
-pg_cron (Supabase)                              all times UTC
-  05:00/05:50 Sun  crexi-run / crexi-ingest ─┐
-  06:00  acris-v2 (deed pulls, class gates)  ├─▶  Base44 app "dealflow"
-  06:12  traded-daily                        │    (Deal / Contact entities)
-  06:30  pipeline-reconcile (merge/dedupe)   │
-  06:50  dos-enrich   07:10  llm-enrich     ─┘
-  07:40  skyline-sync ──── Base44 Deals ──▶ Supabase deals/properties/entities/
-                                            deal_parties/contacts  (invariant-gated)
-                                              │ PostgREST RPC (api_*, anon key, RLS)
-                                              ▼
-                                     buyerdb.netlify.app
-```
 
-- **skyline-sync** (edge function, `skyline/supabase/functions/skyline-sync/`) pages
-  Base44 `Deal` entities and calls `sync_upsert_deals()` (migrations 005/006).
-- Invariants enforced in the SQL function: residential/condo types skipped
-  (`Condo`, `Commercial Condo`, `Co-op`, `Single Family`), dedupe by shortcode AND by
-  property+price(+date-or-unknown), properties fill nulls only, parties carry
-  source + provenance (`amount_gate_passed=true` for deed-native ACRIS parties),
-  contacts only from real source rows (`source='base44:sync'`).
-- Secrets: `app_config` table (RLS, no policies) holds `base44_app_id`,
-  `base44_api_key`, `sync_secret`. Nothing in git; the cron job reads the secret
-  from `app_config` at fire time.
+Allowed jobs:
 
-## Verify (any time)
+- `traded_refresh`
+- `acris_refresh`
+- `crexi_refresh`
+- `property_owner_refresh`
+- `full_refresh`
+
+The request must appear in the Scrapers tab and remain auditable even if the actual worker is offline.
+
+## Verification
+
+Use the committed verification script when production database secrets are available:
 
 ```bash
-# 1. sync health + last run stats
-curl -s -X POST https://hvsvxjdwfbsqaqlmuwlt.supabase.co/functions/v1/skyline-sync \
-  -H 'Content-Type: application/json' -d '{"secret":"<app_config.sync_secret>"}'
-# expect: {"ok":true, "errors":0, ...}; run twice → second run inserted:0 (idempotent)
-
-# 2. site-facing count
-bash execution/probe_links.sh          # supabase-rpc-health / netlify / socrata
-
-# 3. cron trail
-# SELECT jobname,status,start_time FROM cron.job_run_details ORDER BY start_time DESC LIMIT 10;
+bash execution/verify_live_sbi.sh
 ```
 
-## Edge cases & lessons (self-annealing log)
+The script checks:
 
-- **2026-07-06 — 143 duplicate deals on first sync.** Junk source dates ("December 1",
-  `2026-6-8`) nulled by a strict client validator bypassed the addr+price+date dedupe.
-  Fix in BOTH layers: client normalizes unpadded dates instead of discarding
-  (isoDate), SQL treats property+price with either date unknown as duplicate
-  (migration 006). Cleanup deleted the 126 residual dup rows. Full table now has
-  0 duplicate (property, price, date) groups.
-- Base44 holds condo/commercial-condo rows (~173) by design; the sync intentionally
-  skips them — the Skyline DB CHECK would reject them anyway.
-- `cron.job_run_details` "succeeded" only proves the HTTP POST was queued;
-  check `net._http_response` status codes and table deltas for the truth.
+- live `sbi_*` totals
+- required RPC function signatures
+- duplicate deal groups
+- ACRIS gate failures
+- banned asset rows
+- stale running source runs
+- public `api_health` over PostgREST
 
-## Legacy / parallel paths
+## Open production gap
 
-- **GitHub Actions workflows** (`daily-incremental`, `weekly-enrichment`,
-  `load-database`) are the older Python-worker refresh path. They fail-fast without
-  a `DATABASE_URL` repo secret and are NOT required for the daily refresh anymore.
-  Either leave them red (harmless, noisy) or disable the schedules; re-arm only if
-  the curl_cffi scraping path (traded.co Cloudflare bypass) becomes needed again.
-- **⚠️ SECURITY DEBT:** the older dealflow edge functions (acris-v2, traded-daily,
-  pipeline-reconcile, …) contain a **hardcoded Base44 API key + cron secret in
-  source** — flagged in SKYLINE_MASTER_BLUEPRINT §7 since 2026-07-02. Rotate the
-  Base44 key in the Base44 dashboard, update `app_config.base44_api_key`
-  (skyline-sync picks it up automatically), and redeploy the older functions to
-  read from `app_config` too.
+The live project currently has only one Edge Function deployed: `base44-to-sbi-sync`. That means the current production dataset is available and healthy, but the full direct scraper execution train is not yet deployed into the live SBI project. The next build step is not another Netlify rewrite; it is to connect the proven scraper execution path to the live `sbi_source_runs` queue and canonical `sbi_*` write path without changing the scraper logic.
+
+## Security debt
+
+Supabase advisors still report security warnings, including permissive anon policies and disabled RLS on some legacy/workflow tables. Do not blindly lock these down from the browser app without replacing those writes with authenticated/backend or service-role paths, or the app can break. Security hardening should be done as a controlled auth/API migration, not as an incidental scraper change.
