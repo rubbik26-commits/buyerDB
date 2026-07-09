@@ -5,7 +5,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .db import db, rows
-from .routes import deals, agent, uploads, review, workbench, admin, outreach, saved_views
+from .routes import deals, agent, uploads, review, workbench, admin, outreach, saved_views, property_map
 
 app = FastAPI(title="Skyline Deal Intelligence API", version="1.1")
 
@@ -25,6 +25,7 @@ app.include_router(workbench.router)
 app.include_router(admin.router)
 app.include_router(outreach.router)
 app.include_router(saved_views.router)
+app.include_router(property_map.router)
 
 
 @app.get("/api/health")

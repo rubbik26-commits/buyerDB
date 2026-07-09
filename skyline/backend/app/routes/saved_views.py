@@ -1,8 +1,9 @@
 """Saved views API for filters/sorts across workflow surfaces."""
 import json
+from typing import Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..db import db, rows
 
@@ -13,12 +14,12 @@ class SavedViewUpsert(BaseModel):
     user_id: str = "broker"
     name: str
     surface: str
-    filters: dict = {}
-    sort: dict = {}
+    filters: dict = Field(default_factory=dict)
+    sort: dict = Field(default_factory=dict)
 
 
 @router.get("")
-def list_views(user_id: str = "broker", surface: str | None = None):
+def list_views(user_id: str = "broker", surface: Optional[str] = None):
     where = ["user_id=%s"]
     params = [user_id]
     if surface:
@@ -38,6 +39,9 @@ def list_views(user_id: str = "broker", surface: str | None = None):
 def upsert_view(body: SavedViewUpsert):
     if body.surface not in {"deals", "buyers", "properties", "outreach", "audit"}:
         return {"error": "invalid saved-view surface"}
+    name = body.name.strip()
+    if not name:
+        return {"error": "saved-view name is required"}
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             INSERT INTO saved_views (user_id, name, surface, filters, sort)
@@ -45,7 +49,7 @@ def upsert_view(body: SavedViewUpsert):
             ON CONFLICT (user_id, surface, name)
             DO UPDATE SET filters=EXCLUDED.filters, sort=EXCLUDED.sort, updated_at=now()
             RETURNING view_id, user_id, name, surface, filters, sort, created_at, updated_at
-        """, (body.user_id, body.name.strip(), body.surface, json.dumps(body.filters), json.dumps(body.sort)))
+        """, (body.user_id, name, body.surface, json.dumps(body.filters), json.dumps(body.sort)))
         return {"view": rows(cur)[0]}
 
 

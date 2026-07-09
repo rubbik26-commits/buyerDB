@@ -1,18 +1,11 @@
-# Netlify deploys ONLY the static frontend (skyline/frontend), and this is the
-# PRODUCTION deploy (buyerdb.netlify.app). Two supported modes, chosen by the
-# VITE_API_URL env var (Site settings → Environment variables):
-#   RPC mode (current production): VITE_API_URL = https://<ref>.supabase.co —
-#     the bundle talks straight to Supabase PostgREST (migration 004 api_*
-#     functions); no backend host needed for the data tabs. Optionally set
-#     VITE_SUPABASE_ANON_KEY (the PUBLIC anon key — never service_role).
-#   Backend mode: VITE_API_URL = the FastAPI host's public URL (render.yaml)
-#     to enable uploads, entity merges, and the AI Deal Desk.
 [build]
   base = "skyline/frontend"
   command = "npm install && npm run build"
   publish = "dist"
 
-# Single-page app: serve index.html for every route.
+[functions]
+  directory = "netlify/functions"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

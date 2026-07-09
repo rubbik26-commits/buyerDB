@@ -1,4 +1,5 @@
 -- 002_workflow_os.sql — persistent workflow layer for Buyer Intelligence OS
+-- This migration must be safe before the full sbi base schema is present.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS sbi_saved_views (
@@ -16,7 +17,7 @@ CREATE INDEX IF NOT EXISTS sbi_saved_views_user_surface ON sbi_saved_views (user
 
 CREATE TABLE IF NOT EXISTS sbi_outreach_drafts (
   draft_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  entity_id uuid REFERENCES sbi_entities(entity_id),
+  entity_id uuid,
   user_id text NOT NULL DEFAULT 'broker',
   property_summary text,
   subject text NOT NULL,
