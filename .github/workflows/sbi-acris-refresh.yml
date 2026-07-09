@@ -42,7 +42,7 @@ jobs:
         id: request
         run: |
           set -euo pipefail
-          body=$(jq -n --arg job "acris_refresh" --arg user_id "github-actions" --argjson options "{\"limit\": ($ENV.LIMIT|tonumber), \"days\": ($ENV.DAYS|tonumber)}" '{job:$job,user_id:$user_id,options:$options}')
+          body=$(jq -n --arg job "acris_refresh" --arg user_id "github-actions" --argjson limit "$LIMIT" --argjson days "$DAYS" '{job:$job,user_id:$user_id,options:{limit:$limit,days:$days}}')
           curl -fsS -X POST "$SUPABASE_URL/rest/v1/rpc/api_request_scrape" \
             -H 'Content-Type: application/json' \
             -H "apikey: $SUPABASE_ANON_KEY" \
