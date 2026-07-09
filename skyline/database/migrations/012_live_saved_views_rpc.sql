@@ -28,7 +28,7 @@ begin
   with upserted as (
     insert into public.sbi_saved_views(user_id, name, surface, filters, sort)
     values(coalesce(api_save_view.user_id, 'broker'), trim(api_save_view.name), api_save_view.surface, coalesce(api_save_view.filters, '{}'::jsonb), coalesce(api_save_view.sort, '{}'::jsonb))
-    on conflict (user_id, surface, name)
+    on conflict on constraint sbi_saved_views_user_id_surface_name_key
     do update set filters=excluded.filters, sort=excluded.sort, updated_at=now()
     returning *
   )
