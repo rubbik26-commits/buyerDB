@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import db, rows
 from .routes import deals, agent, uploads, review, workbench, admin, outreach, saved_views, property_map
 
-app = FastAPI(title="Skyline Deal Intelligence API", version="1.1")
+app = FastAPI(title="Skyline Deal Intelligence API", version="1.2")
 
 origins = [o.strip() for o in os.environ.get("FRONTEND_URL", "http://localhost:5173").split(",")
            if o.strip() and o.strip() != "*"]
@@ -31,29 +31,29 @@ app.include_router(property_map.router)
 @app.get("/api/health")
 def health():
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM deals")
+        cur.execute("SELECT count(*) FROM sbi_deals")
         n = cur.fetchone()[0]
-    return {"status": "ok", "deals": n}
+    return {"status": "ok", "deals": n, "runtime": "fastapi-sbi"}
 
 
 @app.get("/api/meta")
 def meta():
     """Filter options + headline stats for the frontend to populate dropdowns."""
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT asset_type FROM deals WHERE asset_type IS NOT NULL ORDER BY 1")
+        cur.execute("SELECT DISTINCT asset_type FROM sbi_deals WHERE asset_type IS NOT NULL ORDER BY 1")
         asset_types = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT DISTINCT borough FROM properties WHERE borough IS NOT NULL ORDER BY 1")
+        cur.execute("SELECT DISTINCT borough FROM sbi_properties WHERE borough IS NOT NULL ORDER BY 1")
         boroughs = [r[0] for r in cur.fetchall()]
         cur.execute("""SELECT count(*) AS deals,
                           count(*) FILTER (WHERE sale_price IS NOT NULL) AS priced,
                           coalesce(sum(sale_price),0) AS total_volume,
                           min(sale_date) AS earliest, max(sale_date) AS latest
-                       FROM deals""")
+                       FROM sbi_deals""")
         stats = rows(cur)[0]
-        cur.execute("SELECT count(DISTINCT entity_id) FROM deal_parties WHERE role='buyer'")
+        cur.execute("SELECT count(DISTINCT entity_id) FROM sbi_deal_parties WHERE role='buyer'")
         stats["unique_buyers"] = cur.fetchone()[0]
-        cur.execute("SELECT count(*) FROM review_queue WHERE status='open'")
+        cur.execute("SELECT count(*) FROM sbi_review_queue WHERE status='open'")
         stats["open_reviews"] = cur.fetchone()[0]
-        cur.execute("SELECT count(*) FROM contacts")
+        cur.execute("SELECT count(*) FROM sbi_contacts")
         stats["contacts"] = cur.fetchone()[0]
     return {"asset_types": asset_types, "boroughs": boroughs, "stats": stats}

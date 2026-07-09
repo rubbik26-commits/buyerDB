@@ -52,3 +52,46 @@ jobs:
           npm install
           npm run build
           ! grep -rqiE "sk-[A-Za-z0-9]{16,}|gsk_[A-Za-z0-9]{16,}|postgres(ql)?://|service_role|sb_secret_" dist/ || (echo "SECRET IN BUNDLE" && exit 1)
+
+  seed-live-sbi:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/ACRIS'
+    env:
+      LIVE_DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Require live database secret
+        run: |
+          if [ -z "$LIVE_DATABASE_URL" ]; then
+            echo "::error::Missing SUPABASE_DB_URL or DATABASE_URL repository secret. Add the Supabase session-pooler connection string so the live sbi database can be seeded."
+            exit 1
+          fi
+      - name: Install loader dependencies
+        working-directory: skyline
+        run: pip install -r requirements.txt
+      - name: Seed live sbi database
+        working-directory: skyline
+        env:
+          DATABASE_URL: ${{ env.LIVE_DATABASE_URL }}
+        run: python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
+      - name: Verify live sbi rows
+        working-directory: skyline
+        env:
+          DATABASE_URL: ${{ env.LIVE_DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          cur = conn.cursor()
+          cur.execute('select count(*) from sbi_deals')
+          deals = cur.fetchone()[0]
+          cur.execute('select count(*) from sbi_properties')
+          props = cur.fetchone()[0]
+          print({'sbi_deals': deals, 'sbi_properties': props})
+          if deals <= 0 or props <= 0:
+              raise SystemExit('live sbi seed failed: tables are still empty')
+          PY

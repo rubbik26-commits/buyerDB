@@ -1,170 +1,205 @@
 # Skyline Deal Intelligence
 
 A production system that turns a static NYC commercial-real-estate deal artifact into a
-living application: scrapers refresh the dataset on a schedule, a FastAPI backend serves
-it (and proxies every AI call so no key ever reaches the browser), and an in-app agent
+living application: scrapers refresh the dataset on a schedule, a Python backend/worker serves
+and enriches it, Netlify provides the broker-facing control panel, and an in-app agent
 answers deal questions — "who's the best buyer for this?", "what's this owner's phone
 number?", "when did we last contact them?" — as SQL over Postgres, narrated by whichever
 of six providers is up and within quota.
 
 ```
-frontend/  React 18 + Vite (static) ── the four tabs, deployable to Vercel/Netlify
-backend/   FastAPI ─────────────────── /api/deals /buyers /leaderboards /agent /uploads /review
-worker/    the proven Python pipeline ─ scrapers + amount-gated merges, on a schedule
-shared/    normalize.py ────────────── ONE implementation of every invariant, imported by both
-database/  numbered SQL migrations
-scripts/   CSV → Postgres migration + assertions
+skyline/
+  frontend/  React 18 + Vite static app, deployed to Netlify buyerdb.netlify.app
+  backend/   FastAPI API for optional server-side uploads, AI, admin, and workflow routes
+  worker/    the proven Python scraper pipeline + queue daemon + cron entrypoints
+  shared/    normalize.py — one implementation of address/entity/building-class invariants
+  database/  numbered SQL migrations for the production sbi_* schema
+  scripts/   CSV → Postgres migration + assertions
 ```
 
 > **Repository layout:** in this repo the application lives in the `skyline/`
-> subfolder — `cd skyline` before running any command below. The GitHub Actions
-> workflows live at the repo root (`.github/workflows/`) and are already
-> path-adjusted for this nesting.
+> subfolder — `cd skyline` before running local commands. Netlify remains linked
+> to `rubbik26-commits/buyerDB`, branch `ACRIS`, with build base
+> `skyline/frontend`.
 >
-> **Consolidated source of truth (2026-07-09):** `rubbik26-commits/buyerDB` is
-> now the unified repository for the Buyer Intelligence / Deal Intelligence app.
-> The older `rubbik26-commits/buyers` repo is treated as legacy source material.
-> Netlify project `buyerdb` must be linked to this repo on branch `ACRIS`; see
-> `CONSOLIDATION.md` and `architecture/SOP-deploy-links.md` before deploying.
+> **Consolidated source of truth:** `rubbik26-commits/buyerDB` is the unified
+> Buyer Intelligence / Deal Intelligence repository. The older
+> `rubbik26-commits/buyers` repo is legacy source material only.
 >
-> **Current production topology (2026-07-06, decisions D-008/D-010):**
-> Netlify hosts the static frontend at **buyerdb.netlify.app**, built in **RPC
-> mode** — the bundle talks straight to Supabase PostgREST (`api_*` functions,
-> migration 004) with the public anon key, so the data tabs need **no separate
-> backend**. Postgres runs on Supabase (apply `database/migrations/001–009`,
-> then load the CSV with `scripts/migrate_csv.py`). The daily refresh is
-> **Supabase-native**: pg_cron fires the edge functions in
-> `skyline/supabase/functions/`, which write through `sync_upsert_deals()` —
-> the single SQL write path that enforces every invariant. See
-> `architecture/SOP-daily-refresh.md`.
+> **Production topology:** Netlify is the static frontend/control panel. The
+> scraper runtime is Python: `worker.scheduler` runs as a queue daemon plus cron
+> jobs on a Python host such as Render/Railway/Fly/VPS. Supabase/Postgres stores
+> the `sbi_*` tables and RPC functions the frontend reads. See
+> `architecture/PYTHON_WORKER_CRON_BLUEPRINT.md`.
 >
-> Optional extras: the FastAPI backend (Render/Railway via `render.yaml`,
-> `.env` from `skyline/.env.example`) enables uploads, entity merges, and the
-> AI Deal Desk; the GitHub-Actions worker crons are a **legacy fallback**
-> scraper path, disabled unless the `ENABLE_LEGACY_WORKER` repo variable is
-> `true`.
+> **GitHub Actions:** workflow files remain as a fallback and test harness, but
+> they are not the primary production scraper runtime.
 
-Why a backend is mandatory (not a preference): browsers can't run cron, a client bundle
-can't hold provider/scraper keys, the artifact's Anthropic call only works behind Claude.ai's
-proxy, and the dataset is already >1 MB and grows daily. All four are structural.
+Why a backend/worker is mandatory: browsers cannot run cron, a client bundle cannot hold
+provider/scraper keys, Traded requires the Python `curl_cffi` transport path for reliable
+Cloudflare handling, and the dataset grows beyond a static embedded artifact.
 
-## The invariants (encoded, not hoped for)
+## The invariants: encoded, not hoped for
 
 - **Amount gate** — an ACRIS-sourced party is only attached when the deed amount is within
-  3% of the deal price (or, for no-price deals, the deed is within 60 days). This killed a
-  documented 34/34 wrong-party failure. It lives in one Python write path **and** as a
-  Postgres CHECK (`acris_requires_gate`): an ungated ACRIS party row physically cannot exist.
-- **No residential** — condos, co-ops, single-family and 1–2 family are rejected by a DB CHECK
-  and by a building-class gate in the merge path (the hole that once admitted 30 rows).
-- **Ledgers are durable tables**, not pickle files: `fetch_ledger` (discovery dedupe),
-  `exclusion_ledger` (consulted on every merge), `rolling_ledger`.
-- **Never overwrite non-null; conflicts are flagged, never resolved** (`review_queue`).
+  3% of the deal price, or for no-price deals when the deed is within the allowed date window.
+- **No residential leakage** — condos, co-ops, single-family, and 1–2 family are rejected by
+  building-class/source gates and/or placed into the exclusion ledger.
+- **Ledgers are durable tables**, not pickle files: `sbi_fetch_ledger`,
+  `sbi_exclusion_ledger`, and rolling/enrichment run state.
+- **Never overwrite non-null; conflicts are flagged, never resolved automatically.**
+- **Every scraper run is auditable** through `sbi_source_runs` with status, stats, and error.
 
-## Quick start (local)
+## Quick start: local development
 
-Prereqs: Python 3.12, Node 18+, PostgreSQL 16.
+Prereqs: Python 3.12, Node 18+, PostgreSQL/Supabase connection string.
 
 ```bash
 cd skyline
 
-# 1. database
-createdb skyline
-psql skyline -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
-export DATABASE_URL=postgresql://localhost/skyline
+# Python dependencies
+pip install -r requirements.txt
+
+# Database
+export DATABASE_URL="postgresql://..."
 for f in database/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
 
-# 2. load the canonical dataset (+ exclusion ledger) and verify
-pip install -r requirements.txt
+# Optional initial load
 python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
-python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv     # must print ALL ASSERTIONS PASSED
+python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv
 
-# 3. backend
-cp .env.example .env          # add provider keys as available
-uvicorn backend.app.main:app --reload      # http://localhost:8000
+# Optional FastAPI backend
+uvicorn backend.app.main:app --reload
 
-# 4. frontend
-cd frontend && cp .env.example .env         # VITE_API_URL=http://localhost:8000
-npm install && npm run dev                  # http://localhost:5173
+# Frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-Without any AI key the four data tabs work fully; the Deal Desk returns an honest
-"no provider configured" message (never a fabricated answer).
+Without any AI key the data tabs still work. The Deal Desk must return an honest
+"no provider configured" response rather than fabricating a result.
 
-## Tests
+## Python scraper runtime
+
+The production scraper runtime is `worker.scheduler`:
+
+```bash
+# Claim one manual Scrapers-tab request
+python -m worker.scheduler --mode queue-once --max-claims 1
+
+# Long-running queue daemon for manual requests from Netlify/Supabase
+python -m worker.scheduler --mode queue-daemon
+
+# Daily cron: Traded incremental + fresh ACRIS + Rolling Sales
+python -m worker.scheduler --mode daily
+
+# Weekly cron: delayed ACRIS party/owner enrichment
+python -m worker.scheduler --mode weekly
+
+# Full repair/backfill pass: daily + weekly + optional Crexi
+python -m worker.scheduler --mode full
+```
+
+Manual flow:
+
+1. Netlify Scrapers tab calls `api_request_scrape()`.
+2. Supabase inserts a durable `sbi_source_runs` row with `stats.requested_status='requested'`.
+3. `worker.scheduler --mode queue-daemon` claims the row.
+4. `worker.run_requested` dispatches the correct Python module.
+5. `sbi_source_runs` is updated with completed/failed status, stats, and errors.
+
+Job dispatch:
+
+| UI job | Python runtime |
+|---|---|
+| `traded_refresh` | `worker.run_incremental` |
+| `acris_refresh` | `worker.phase3_fresh` |
+| `property_owner_refresh` | `worker.phase2_stages` |
+| `crexi_refresh` | `worker.crexi_refresh` if Apify credentials exist; otherwise skipped honestly |
+| `full_refresh` | Traded + ACRIS fresh + Rolling Sales + phase2 + optional Crexi |
+
+## Deploy
+
+### Netlify
+
+Static frontend only.
+
+- Project: `buyerdb`
+- Repo: `rubbik26-commits/buyerDB`
+- Branch: `ACRIS`
+- Base: `skyline/frontend`
+- Build: `npm install && npm run build`
+- Publish: `dist`
+
+### Python runtime
+
+Use `render.yaml` to deploy:
+
+- `skyline-api` — optional FastAPI service.
+- `skyline-scraper-queue` — long-running queue daemon.
+- `skyline-daily-refresh` — daily cron.
+- `skyline-weekly-owner-enrichment` — weekly cron.
+- `skyline-weekly-full-refresh` — weekly repair/backfill cron.
+
+Required secret on every worker/cron service:
+
+```bash
+DATABASE_URL=<Supabase session-pooler connection string>
+```
+
+Optional:
+
+```bash
+SOCRATA_APP_TOKEN=<NYC Open Data token>
+SCRAPERAPI_KEY=<fallback for Traded if curl_cffi path needs help>
+APIFY_TOKEN=<Crexi refresh>
+APIFY_CREXI_ACTOR=<Crexi Apify actor id>
+ALERT_WEBHOOK_URL=<failure alerts, where supported>
+```
+
+## Tests and verification
 
 ```bash
 cd skyline
-python -m pytest worker/test_store.py backend/tests worker/test_run_incremental.py -q
+python -m pytest worker/test_store.py worker/test_run_incremental.py worker/test_phase2_enrichment.py worker/test_phase3_fresh.py worker/test_rolling_sales.py backend/tests -q
 python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv
-cd frontend && npm run build      # production build; dist contains only public frontend env
+cd frontend && npm run build
+```
+
+Operational verification:
+
+```sql
+select job,status,started_at,finished_at,error
+from sbi_source_runs
+order by started_at desc
+limit 20;
+
+select disposition,count(*)
+from sbi_fetch_ledger
+group by disposition
+order by count(*) desc;
+
+select issue_class,count(*)
+from sbi_review_queue
+where status='open'
+group by issue_class
+order by count(*) desc;
 ```
 
 ## The AI agent
 
-Structured data → SQL-first tool-use, not vector search. "Phone for owner X" is a JOIN, not
-a similarity guess. Nine named tools (`lookup_contact`, `find_similar_buyers` — the artifact's
-`rankCandidates` scoring in SQL, `buyer_leaderboard`, `last_interaction`, `entity_history`,
-`missing_contact_report`, `seller_owners_of_similar`, `recent_changes`) plus a guarded
-`run_readonly_sql` escape hatch (SELECT-only, allowlisted tables, auto-LIMIT, 5s timeout).
-Two stages: a fast lane plans the tool + arguments, a quality lane narrates the rows and cites
-them. Contact values render only from `contacts` rows — the model never invents one.
+Structured data → SQL-first tool use, not vector guessing. "Phone for owner X" is a JOIN, not
+a similarity answer. Contact values render only from `sbi_contacts` rows; the model never invents
+one. Provider failover remains configurable through `AI_PROVIDER_ORDER` and `AI_QUALITY_PROVIDER`.
 
-## Providers (verified 2026-07-02; re-verify before relying on limits)
+## Acceptance standard
 
-| Provider | Free tier | Role |
-|---|---|---|
-| Groq | ~30 RPM, 1K–14.4K RPD | primary tool lane |
-| Gemini | Flash only, ~10–15 RPM (may train on prompts — no contact data) | secondary |
-| OpenRouter | 50 RPD free, 1,000/day after one-time $10 | breadth |
-| Cloudflare | 10,000 neurons/day | utility |
-| Anthropic | no free tier (paid) | quality lane |
-| OpenAI | no permanent free tier | optional quality |
+A build is not considered working because a UI button exists. It is working when:
 
-The router (`AI_PROVIDER_ORDER`, `AI_QUALITY_PROVIDER`) fails over on 429/5xx/timeout/network,
-pre-emptively skips a provider whose daily budget is spent, and logs every attempt
-(`provider`, `latency`, `fallback_from`, `status`) to `ai_logs`.
-
-## Scheduling
-
-**Live path (Supabase-native, D-008/D-010):** pg_cron job `skyline-sync-daily`
-(07:40 UTC) plus the dealflow train fire the edge functions in
-`skyline/supabase/functions/` (acris-v2, traded-daily, crexi-run/-ingest,
-dos-enrich), which write through `sync_upsert_deals()`. Run state lands in
-`sync_state` and every function returns a full counters summary. Source of
-truth: `architecture/SOP-daily-refresh.md`.
-
-**Legacy fallback (GitHub Actions, disabled by default):** gated on the
-`ENABLE_LEGACY_WORKER` repo variable; `workflow_dispatch` always works.
-
-- `daily-incremental.yml` (`17 13 * * *`): traded discovery minus the fetch ledger → gated
-  merge → fresh ACRIS window → rolling batch → keep-alive commit (defeats the 60-day
-  schedule auto-disable) → fails loudly with a webhook alert.
-- `weekly-enrichment.yml` (`43 11 * * 0`): phase2 match → amount-gated apply; closes the
-  7–8 week ACRIS party-recording lag as the window rolls.
-- `ci.yml` (always on): spins a fresh Postgres, applies migrations, runs the full test
-  suite, builds the frontend, and fails if any secret pattern appears in `dist/`.
-
-curl_cffi bypasses traded.co's Cloudflare for free on the Python runner; a JS/Deno host would
-need ScraperAPI (~11 credits per protected page). That's why the fallback worker stays Python
-(the live traded-daily edge function spends ScraperAPI credits instead).
-
-## Deploy
-
-Frontend → Netlify (static, RPC mode; `netlify.toml` at repo root — production is
-buyerdb.netlify.app, with a GitHub Pages mirror via `deploy-frontend.yml`). Netlify must be
-linked to `rubbik26-commits/buyerDB`, branch `ACRIS`, with build base `skyline/frontend`.
-Postgres → Supabase (Pro recommended for backups and no idle-pause). Optional:
-Backend → Render/Railway (FastAPI via `render.yaml`; then point `VITE_API_URL` at it),
-legacy worker → GitHub Actions (set `DATABASE_URL` secret + `ENABLE_LEGACY_WORKER=true`).
-Estimated cost: $0 prototype → ~$32–42/mo production.
-
-## Acceptance evidence (this build)
-
-- **A — scheduled ingest + ledger dedupe:** `worker/test_run_incremental.py` — a run merges a
-  new deal, the exclusion ledger blocks a residential one, the re-run dedupes discovery via the
-  fetch ledger. PASS.
-- **B — phone from an uploaded CSV, with provenance:** upload → entity resolution → `lookup_contact`
-  returns the uploaded number with `source=upload:<id>`, linked to the buyer's real deal history.
-  Verified end-to-end.
-- **C — provider failover:** `backend/tests/test_provider_router.py` — kill the primary, the
-  request succeeds via fallback, `fallback_from` is logged. 6/6 PASS.
+1. A manual request appears in `sbi_source_runs`.
+2. The Python queue daemon claims it.
+3. The correct Python module runs.
+4. Stats/errors are written back to `sbi_source_runs`.
+5. New/changed rows pass through `sbi_store.merge_deal()` or the amount-gated party-fill path.
+6. Netlify reflects the updated data through Supabase RPC without exposing scraper/provider secrets.
