@@ -1,7 +1,7 @@
 const RAW_BASE = import.meta.env.VITE_API_URL || "";
 const ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const SUPABASE_BASE = RAW_BASE.includes(".supabase.co") ? new URL(RAW_BASE).origin : null;
-const RPC_MODE = Boolean(SUPABASE_BASE && ANON);
+const RPC_MODE = Boolean(SUPABASE_BASE && ANON && import.meta.env.VITE_USE_SUPABASE_RPC === "true");
 const BASE = RPC_MODE ? SUPABASE_BASE : (SUPABASE_BASE ? "" : (RAW_BASE || "http://localhost:8000"));
 const SUPA = RPC_MODE ? SUPABASE_BASE : null;
 
