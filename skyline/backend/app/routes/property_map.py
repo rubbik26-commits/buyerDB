@@ -1,4 +1,4 @@
-"""Property map API.
+"""Property map API over live sbi_* tables.
 
 Returns only real geocoded rows. No mock coordinates are generated.
 """
@@ -28,17 +28,17 @@ def property_map(limit: int = Query(1000, ge=1, le=5000)):
                 b.entity_id AS buyer_entity_id,
                 b.display_name AS buyer,
                 s.display_name AS seller
-              FROM properties p
-              LEFT JOIN deals d ON d.property_id=p.property_id
+              FROM sbi_properties p
+              LEFT JOIN sbi_deals d ON d.property_id=p.property_id
               LEFT JOIN LATERAL (
                 SELECT e.entity_id, e.display_name
-                FROM deal_parties dp JOIN entities e USING(entity_id)
+                FROM sbi_deal_parties dp JOIN sbi_entities e USING(entity_id)
                 WHERE dp.deal_id=d.deal_id AND dp.role='buyer'
                 LIMIT 1
               ) b ON true
               LEFT JOIN LATERAL (
                 SELECT e.display_name
-                FROM deal_parties dp JOIN entities e USING(entity_id)
+                FROM sbi_deal_parties dp JOIN sbi_entities e USING(entity_id)
                 WHERE dp.deal_id=d.deal_id AND dp.role='seller'
                 LIMIT 1
               ) s ON true
@@ -50,6 +50,6 @@ def property_map(limit: int = Query(1000, ge=1, le=5000)):
             LIMIT %s
         """, (limit,))
         points = rows(cur)
-        cur.execute("SELECT count(*) FROM properties WHERE latitude IS NOT NULL AND longitude IS NOT NULL")
+        cur.execute("SELECT count(*) FROM sbi_properties WHERE latitude IS NOT NULL AND longitude IS NOT NULL")
         count = cur.fetchone()[0]
     return {"points": points, "count": count}

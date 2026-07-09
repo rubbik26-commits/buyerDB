@@ -1,6 +1,9 @@
-# Render blueprint: deploys the FastAPI backend (the layer Netlify cannot host).
-# In the Render dashboard: New → Blueprint → connect this repo. After the service
-# is live, set VITE_API_URL on the Netlify site to this service's public URL.
+# Render blueprint for Skyline Deal Intelligence.
+#
+# Netlify hosts the static frontend/control panel. Render runs the Python API and
+# the Python scraper runtime that Netlify cannot host: queue worker + cron jobs.
+# Connect this repo, set the secret env vars below, then point Netlify's
+# VITE_API_URL to skyline-api only if you want the FastAPI path instead of RPC mode.
 services:
   - type: web
     name: skyline-api
@@ -9,19 +12,113 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     plan: free
-    # Render polls this to know the service is live and to avoid routing to a
-    # cold/dead instance; /api/health returns 200 with the deal count.
     healthCheckPath: /api/health
     envVars:
-      - key: DATABASE_URL          # Supabase → Connect → Session pooler URI
+      - key: DATABASE_URL
         sync: false
-      - key: FRONTEND_URL          # your Netlify site URL, e.g. https://buyerdb.netlify.app
+      - key: FRONTEND_URL
         sync: false
-      - key: GROQ_API_KEY          # free primary AI lane (console.groq.com); optional
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
       - key: AI_PROVIDER_ORDER
         value: groq,gemini,openrouter,cloudflare
       - key: AI_QUALITY_PROVIDER
         value: anthropic,openai
+      - key: PYTHON_VERSION
+        value: 3.12.7
+
+  - type: worker
+    name: skyline-scraper-queue
+    runtime: python
+    rootDir: skyline
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.scheduler --mode queue-daemon
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: SCRAPERAPI_KEY
+        sync: false
+      - key: APIFY_TOKEN
+        sync: false
+      - key: APIFY_CREXI_ACTOR
+        sync: false
+      - key: WORKER_POLL_SECONDS
+        value: "30"
+      - key: WORKER_MAX_CLAIMS_PER_TICK
+        value: "1"
+      - key: ROLLING_BATCH
+        value: "400"
+      - key: PYTHON_VERSION
+        value: 3.12.7
+
+  - type: cron
+    name: skyline-daily-refresh
+    runtime: python
+    rootDir: skyline
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.scheduler --mode daily
+    schedule: "40 7 * * *"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: SCRAPERAPI_KEY
+        sync: false
+      - key: ROLLING_BATCH
+        value: "400"
+      - key: PYTHON_VERSION
+        value: 3.12.7
+
+  - type: cron
+    name: skyline-weekly-owner-enrichment
+    runtime: python
+    rootDir: skyline
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.scheduler --mode weekly
+    schedule: "43 11 * * 0"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.7
+
+  - type: cron
+    name: skyline-weekly-full-refresh
+    runtime: python
+    rootDir: skyline
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m worker.scheduler --mode full
+    schedule: "17 8 * * 6"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: SCRAPERAPI_KEY
+        sync: false
+      - key: APIFY_TOKEN
+        sync: false
+      - key: APIFY_CREXI_ACTOR
+        sync: false
+      - key: ROLLING_BATCH
+        value: "400"
       - key: PYTHON_VERSION
         value: 3.12.7

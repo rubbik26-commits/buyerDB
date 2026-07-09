@@ -1,15 +1,9 @@
-"""agent.py — the knowledge-base agent (blueprint §10-12).
+"""agent.py — the knowledge-base agent.
 
-Two-stage pipeline, portable across all six providers (JSON planning instead of
-provider-specific function-calling, since free tiers vary in tool-call support —
-this mirrors the artifact's proven callClaude(criteria)->score->callClaude(synth) shape):
-
-  1. PLAN (fast lane, json_mode): question + tool catalog -> {tool, arguments}
-  2. EXECUTE the chosen tool deterministically (SQL)
-  3. SYNTHESIZE (quality lane, degrades to free): narrate the rows, cite them,
-     never invent contact info, state public-record limits honestly.
-
-Contact values shown to the user come only from tool rows, never from model prose.
+Two-stage pipeline, portable across all six providers:
+1. PLAN: question + tool catalog -> {tool, arguments}
+2. EXECUTE: deterministic SQL-backed tool
+3. SYNTHESIZE: narrate rows, cite facts, never invent contact info
 """
 import json
 from fastapi import APIRouter
@@ -38,8 +32,11 @@ Neighborhood names map to boroughs (e.g. Williamsburg/Bushwick->Brooklyn, Astori
 Harlem/SoHo/Tribeca->Manhattan, Riverdale/Fordham->Bronx).
 Asset types are exactly one of: Multifamily, Office, Retail, Industrial, Hotel, Mixed-Use,
 Development Site, Garage/Auto, Commercial, Storage.
+If using run_readonly_sql, query only the live tables: sbi_deals, sbi_properties,
+sbi_entities, sbi_deal_parties, sbi_contacts, sbi_interactions, sbi_review_queue,
+sbi_source_runs, sbi_fetch_ledger, sbi_exclusion_ledger.
 Respond with ONLY a JSON object: {"tool": "<name>", "arguments": {...}, "why": "<short>"}.
-If no tool fits, use {"tool": "run_readonly_sql", "arguments": {"sql": "<SELECT ...>"}}.
+If no named tool fits, use {"tool": "run_readonly_sql", "arguments": {"sql": "<SELECT ...>"}}.
 
 Available tools:
 %s"""
@@ -60,9 +57,6 @@ class PlannerFailed(Exception):
 
 
 def _history_messages(history: List[dict]):
-    """Client history is untrusted: roles are whitelisted to user/assistant (the
-    frontend historically sent 'agent', and 'system' would override SYNTH_SYSTEM),
-    keys may be missing, and empty-content turns are dropped."""
     msgs = []
     for h in history[-6:]:
         if not isinstance(h, dict):
@@ -70,8 +64,7 @@ def _history_messages(history: List[dict]):
         content = str(h.get("content") or "").strip()
         if not content:
             continue
-        msgs.append({"role": "user" if h.get("role") == "user" else "assistant",
-                     "content": content})
+        msgs.append({"role": "user" if h.get("role") == "user" else "assistant", "content": content})
     return msgs
 
 
@@ -82,13 +75,10 @@ def _plan(question: str, history: List[dict]):
     msgs.append({"role": "user", "content": question})
     out = router_.complete(msgs, lane="fast", purpose="plan", json_mode=True, max_tokens=400)
     raw = out["text"].strip()
-    # tolerate ```json fences or leading prose
     if "```" in raw:
         raw = raw.split("```")[1].replace("json", "", 1).strip() if raw.count("```") >= 2 else raw
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0:
-        # answering the user's question from a fabricated `SELECT 1` result
-        # would be fabrication — fail explicitly instead
         raise PlannerFailed(f"no JSON object in planner output: {raw[:200]!r}")
     try:
         plan = json.loads(raw[start:end + 1])
@@ -105,8 +95,6 @@ def _synthesize(question: str, plan: dict, result: dict, history: List[dict]):
         f"Question: {question}\n\nTool used: {plan.get('tool')}\n"
         f"Tool result (JSON):\n{json.dumps(result, default=str)[:6000]}\n\n"
         "Answer the question from this result."})
-    # Tool results can embed contacts rows (lookup_contact, entity_detail) —
-    # behavioral rule 6 bars trainable free tiers from ever seeing them.
     out = router_.complete(msgs, lane="quality", purpose="synthesize", max_tokens=900,
                            deny=SENSITIVE_DENY)
     return out["text"], out.get("provider")
@@ -132,13 +120,11 @@ def _run(question, history):
 
 @router.post("/agent")
 def agent(q: AgentQuery):
-    """Non-streaming: returns the plan, the raw tool rows (for citation/linking), and the answer."""
     try:
         return _run(q.question, q.history)
     except ProviderError as e:
         return {"error": "no_ai_provider_available", "detail": str(e),
-                "hint": "Set at least one of GROQ_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / "
-                        "CLOUDFLARE_* / ANTHROPIC_API_KEY / OPENAI_API_KEY."}
+                "hint": "Set at least one of GROQ_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / CLOUDFLARE_* / ANTHROPIC_API_KEY / OPENAI_API_KEY."}
     except PlannerFailed as e:
         return {"error": "planner_failed", "detail": str(e),
                 "hint": "The planning model returned no usable JSON. Try rephrasing the question."}
@@ -146,23 +132,20 @@ def agent(q: AgentQuery):
 
 @router.post("/agent/stream")
 def agent_stream(q: AgentQuery):
-    """SSE: emits plan -> tool result -> streamed answer tokens. The tool rows are sent
-    as a discrete event so the UI can render citations even if synthesis fails."""
     def gen():
         try:
             history = q.history or []
             plan, plan_provider = _plan(q.question, history)
             yield _sse("plan", {"tool": plan.get("tool"), "arguments": plan.get("arguments"),
                                 "why": plan.get("why"), "provider": plan_provider})
-            result = agent_tools.call_tool(plan.get("tool", "run_readonly_sql"),
-                                           plan.get("arguments", {}) or {})
+            result = agent_tools.call_tool(plan.get("tool", "run_readonly_sql"), plan.get("arguments", {}) or {})
             yield _sse("result", result)
             answer, synth_provider = _synthesize(q.question, plan, result, history)
             yield _sse("answer", {"text": answer, "provider": synth_provider})
             yield _sse("done", {})
         except (ProviderError, PlannerFailed) as e:
             yield _sse("error", {"detail": str(e)})
-        except Exception as e:  # a tool bug must end the stream with an error event, not silence
+        except Exception as e:
             yield _sse("error", {"detail": f"{type(e).__name__}: {e}"})
     return StreamingResponse(gen(), media_type="text/event-stream")
 

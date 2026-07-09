@@ -1,47 +1,31 @@
-"""agent_tools.py — the SQL-first tool layer for the agent (blueprint §10-12).
-
-Every flagship question is a deterministic JOIN, not a similarity search:
-  "phone for owner X"        -> lookup_contact
-  "when did we last talk"    -> last_interaction
-  "best buyer for X"         -> find_similar_buyers (ported rankCandidates scoring)
-Contact fields are returned ONLY from the contacts table — never invented. Each
-tool returns rows the UI can cite (entity_id, deal shortcode). run_readonly_sql is
-the long-tail escape hatch, hard-guarded to SELECT-only on allowlisted tables.
-"""
+"""agent_tools.py — SQL-first tool layer over the live sbi_* schema."""
 import re
 from ..db import db, rows
 
-# ── entity resolution shared by the name-taking tools ───────────────────────
 _TRGM_MIN = 0.45
 
 
 def _resolve_entities(cur, name, limit=5):
-    """exact norm_name -> alias -> trigram(>0.45). Returns [(entity_id, display_name, method, score)].
-    The explicit similarity threshold matters: the %% operator alone uses
-    pg_trgm's default 0.3, weak enough to present a wrong entity's contacts
-    as 'the' match."""
     from shared.normalize import norm_entity
     nn = norm_entity(name)
     if not nn:
         return []
-    cur.execute("SELECT entity_id, display_name FROM entities WHERE norm_name=%s", (nn,))
+    cur.execute("SELECT entity_id, display_name FROM sbi_entities WHERE norm_name=%s", (nn,))
     r = cur.fetchall()
     if r:
         return [(x[0], x[1], "exact", 1.0) for x in r]
-    cur.execute("""SELECT e.entity_id, e.display_name FROM entity_aliases a
-                   JOIN entities e USING (entity_id) WHERE a.alias_norm=%s""", (nn,))
+    cur.execute("""SELECT e.entity_id, e.display_name FROM sbi_entity_aliases a
+                   JOIN sbi_entities e USING (entity_id) WHERE a.alias_norm=%s""", (nn,))
     r = cur.fetchall()
     if r:
         return [(x[0], x[1], "alias", 1.0) for x in r]
     cur.execute("""SELECT entity_id, display_name, similarity(norm_name,%s) AS s
-                   FROM entities WHERE norm_name %% %s AND similarity(norm_name,%s) > %s
+                   FROM sbi_entities WHERE norm_name %% %s AND similarity(norm_name,%s) > %s
                    ORDER BY s DESC LIMIT %s""", (nn, nn, nn, _TRGM_MIN, limit))
     return [(x[0], x[1], "trgm", round(float(x[2]), 3)) for x in cur.fetchall()]
 
 
 def lookup_contact(entity_name: str):
-    """Phone/email/mailing for an entity. Never fabricates: returns has_contact=False
-    with the public-record ceiling explained when nothing is on file."""
     with db() as conn, conn.cursor() as cur:
         matches = _resolve_entities(cur, entity_name)
         if not matches:
@@ -49,9 +33,9 @@ def lookup_contact(entity_name: str):
         out = []
         for eid, disp, method, score in matches:
             cur.execute("""SELECT person_name, title, phone, email, mailing_address, source, confidence
-                           FROM contacts WHERE entity_id=%s ORDER BY is_primary DESC, confidence DESC""", (eid,))
+                           FROM sbi_contacts WHERE entity_id=%s ORDER BY is_primary DESC, confidence DESC""", (eid,))
             contacts = rows(cur)
-            cur.execute("SELECT mailing_address FROM deal_parties WHERE entity_id=%s AND mailing_address IS NOT NULL LIMIT 1", (eid,))
+            cur.execute("SELECT mailing_address FROM sbi_deal_parties WHERE entity_id=%s AND mailing_address IS NOT NULL LIMIT 1", (eid,))
             mail = cur.fetchone()
             out.append({"entity_id": str(eid), "name": disp, "match_method": method, "match_score": score,
                         "has_contact": bool(contacts), "contacts": contacts,
@@ -70,7 +54,7 @@ def last_interaction(entity_name: str):
         out = []
         for eid, disp, method, score in matches:
             cur.execute("""SELECT channel, occurred_at, subject, notes, outcome, user_id
-                           FROM interactions WHERE entity_id=%s ORDER BY occurred_at DESC LIMIT 5""", (eid,))
+                           FROM sbi_interactions WHERE entity_id=%s ORDER BY occurred_at DESC LIMIT 5""", (eid,))
             inter = rows(cur)
             out.append({"entity_id": str(eid), "name": disp, "match_method": method,
                         "interaction_count": len(inter),
@@ -83,16 +67,20 @@ def buyer_leaderboard(asset_type=None, borough=None, price_min=None, price_max=N
                       since=None, rank_by="count", limit=15):
     where, params = ["dp.role='buyer'"], []
     for col, val in (("d.asset_type", asset_type), ("p.borough", borough)):
-        if val: where.append(f"{col}=%s"); params.append(val)
+        if val:
+            where.append(f"{col}=%s")
+            params.append(val)
     for col, val, op in (("d.sale_price", price_min, ">="), ("d.sale_price", price_max, "<="),
                          ("d.sale_date", since, ">=")):
-        if val is not None: where.append(f"{col} {op} %s"); params.append(val)
+        if val is not None:
+            where.append(f"{col} {op} %s")
+            params.append(val)
     order = "vol DESC" if rank_by == "vol" else "n DESC"
     with db() as conn, conn.cursor() as cur:
         cur.execute(f"""SELECT e.entity_id, e.display_name AS name, e.is_spv_suspect,
-                          count(*) AS n, coalesce(sum(d.sale_price),0) AS vol, max(d.sale_date) AS last_deal
-                        FROM deal_parties dp JOIN entities e USING (entity_id)
-                        JOIN deals d USING (deal_id) JOIN properties p USING (property_id)
+                          count(DISTINCT d.deal_id) AS n, coalesce(sum(d.sale_price),0) AS vol, max(d.sale_date) AS last_deal
+                        FROM sbi_deal_parties dp JOIN sbi_entities e USING (entity_id)
+                        JOIN sbi_deals d USING (deal_id) JOIN sbi_properties p USING (property_id)
                         WHERE {' AND '.join(where)}
                         GROUP BY e.entity_id, e.display_name, e.is_spv_suspect
                         ORDER BY {order} LIMIT %s""", params + [limit])
@@ -102,10 +90,6 @@ def buyer_leaderboard(asset_type=None, borough=None, price_min=None, price_max=N
 
 
 def find_similar_buyers(asset_type=None, borough=None, price=None, keywords=None, limit=15):
-    """Ported rankCandidates scoring from the artifact Agent Desk, expressed in SQL:
-       +3/-2 asset match, +2/-1 borough, +/-1 price band (min x0.5 / max x2),
-       +2 keyword hit in address+market, +0.5*min(count,5) recurrence bonus;
-       is_spv_suspect discounted. Aggregates a buyer's whole track record, then scores."""
     kw = [k.strip().lower() for k in (keywords or []) if k and k.strip()]
     pmin = price * 0.5 if price else None
     pmax = price * 2.0 if price else None
@@ -115,8 +99,8 @@ def find_similar_buyers(asset_type=None, borough=None, price=None, keywords=None
               SELECT e.entity_id, e.display_name, e.is_spv_suspect,
                      d.asset_type, p.borough, d.sale_price,
                      lower(coalesce(p.address_raw,'') || ' ' || coalesce(p.market,'')) AS hay
-              FROM deal_parties dp JOIN entities e USING (entity_id)
-              JOIN deals d USING (deal_id) JOIN properties p USING (property_id)
+              FROM sbi_deal_parties dp JOIN sbi_entities e USING (entity_id)
+              JOIN sbi_deals d USING (deal_id) JOIN sbi_properties p USING (property_id)
               WHERE dp.role='buyer'),
             scored AS (
               SELECT entity_id, display_name, is_spv_suspect, count(*) AS deal_count,
@@ -139,13 +123,13 @@ def find_similar_buyers(asset_type=None, borough=None, price=None, keywords=None
             {"asset": asset_type, "boro": borough, "pmin": pmin, "pmax": pmax,
              "kw": kw, "limit": limit})
         cands = rows(cur)
-        for c in cands:                    # attach contact availability + 3 recent deals for narration
+        for c in cands:
             cur.execute("""SELECT d.sale_date, p.address_raw AS address, p.borough, d.asset_type, d.sale_price
-                           FROM deal_parties dp JOIN deals d USING (deal_id) JOIN properties p USING (property_id)
+                           FROM sbi_deal_parties dp JOIN sbi_deals d USING (deal_id) JOIN sbi_properties p USING (property_id)
                            WHERE dp.entity_id=%s AND dp.role='buyer'
                            ORDER BY d.sale_date DESC NULLS LAST LIMIT 3""", (c["entity_id"],))
             c["recent_deals"] = rows(cur)
-            cur.execute("SELECT count(*) FROM contacts WHERE entity_id=%s", (c["entity_id"],))
+            cur.execute("SELECT count(*) FROM sbi_contacts WHERE entity_id=%s", (c["entity_id"],))
             c["has_contact"] = cur.fetchone()[0] > 0
         return {"criteria": {"asset_type": asset_type, "borough": borough, "price": price, "keywords": kw},
                 "candidates": cands}
@@ -157,27 +141,31 @@ def entity_history(entity_name: str, role=None):
         if not matches:
             return {"query": entity_name, "deals": []}
         eid, disp, method, score = matches[0]
-        where = ["dp.entity_id=%s"]; params = [eid]
-        if role: where.append("dp.role=%s"); params.append(role)
+        where = ["dp.entity_id=%s"]
+        params = [eid]
+        if role:
+            where.append("dp.role=%s")
+            params.append(role)
         cur.execute(f"""SELECT dp.role, d.sale_date, p.address_raw AS address, p.borough,
                           d.asset_type, d.sale_price, d.units, d.sqft, d.shortcode, d.source_url
-                        FROM deal_parties dp JOIN deals d USING (deal_id) JOIN properties p USING (property_id)
+                        FROM sbi_deal_parties dp JOIN sbi_deals d USING (deal_id) JOIN sbi_properties p USING (property_id)
                         WHERE {' AND '.join(where)} ORDER BY d.sale_date DESC NULLS LAST""", params)
-        deals = rows(cur)
+        deal_rows = rows(cur)
         return {"entity_id": str(eid), "name": disp, "match_method": method,
-                "deal_count": len(deals), "deals": deals}
+                "deal_count": len(deal_rows), "deals": deal_rows}
 
 
 def seller_owners_of_similar(asset_type=None, borough=None, limit=15):
-    """Sellers who have transacted similar assets — useful for sourcing off-market."""
     where, params = ["dp.role='seller'"], []
     for col, val in (("d.asset_type", asset_type), ("p.borough", borough)):
-        if val: where.append(f"{col}=%s"); params.append(val)
+        if val:
+            where.append(f"{col}=%s")
+            params.append(val)
     with db() as conn, conn.cursor() as cur:
-        cur.execute(f"""SELECT e.entity_id, e.display_name AS name, count(*) AS sales,
+        cur.execute(f"""SELECT e.entity_id, e.display_name AS name, count(DISTINCT d.deal_id) AS sales,
                           coalesce(sum(d.sale_price),0) AS vol, max(d.sale_date) AS last_sale
-                        FROM deal_parties dp JOIN entities e USING (entity_id)
-                        JOIN deals d USING (deal_id) JOIN properties p USING (property_id)
+                        FROM sbi_deal_parties dp JOIN sbi_entities e USING (entity_id)
+                        JOIN sbi_deals d USING (deal_id) JOIN sbi_properties p USING (property_id)
                         WHERE {' AND '.join(where)}
                         GROUP BY e.entity_id, e.display_name ORDER BY sales DESC, vol DESC LIMIT %s""",
                     params + [limit])
@@ -185,19 +173,20 @@ def seller_owners_of_similar(asset_type=None, borough=None, limit=15):
 
 
 def missing_contact_report(asset_type=None, borough=None, min_deals=2, limit=25):
-    """Entities with real deal activity but no phone/email on file — the highest-value gap list."""
     where, params = ["dp.role='buyer'"], []
     for col, val in (("d.asset_type", asset_type), ("p.borough", borough)):
-        if val: where.append(f"{col}=%s"); params.append(val)
+        if val:
+            where.append(f"{col}=%s")
+            params.append(val)
     with db() as conn, conn.cursor() as cur:
-        cur.execute(f"""SELECT e.entity_id, e.display_name AS name, count(*) AS deals,
+        cur.execute(f"""SELECT e.entity_id, e.display_name AS name, count(DISTINCT d.deal_id) AS deals,
                           coalesce(sum(d.sale_price),0) AS vol
-                        FROM deal_parties dp JOIN entities e USING (entity_id)
-                        JOIN deals d USING (deal_id) JOIN properties p USING (property_id)
-                        LEFT JOIN contacts c ON c.entity_id=e.entity_id
+                        FROM sbi_deal_parties dp JOIN sbi_entities e USING (entity_id)
+                        JOIN sbi_deals d USING (deal_id) JOIN sbi_properties p USING (property_id)
+                        LEFT JOIN sbi_contacts c ON c.entity_id=e.entity_id
                         WHERE {' AND '.join(where)} AND c.contact_id IS NULL
                         GROUP BY e.entity_id, e.display_name
-                        HAVING count(*) >= %s ORDER BY vol DESC LIMIT %s""", params + [min_deals, limit])
+                        HAVING count(DISTINCT d.deal_id) >= %s ORDER BY vol DESC LIMIT %s""", params + [min_deals, limit])
         return {"filters": {"asset_type": asset_type, "borough": borough, "min_deals": min_deals},
                 "entities_missing_contact": rows(cur)}
 
@@ -206,7 +195,7 @@ def recent_changes(days: int = 7, limit: int = 50):
     with db() as conn, conn.cursor() as cur:
         cur.execute("""SELECT d.deal_id, d.sale_date, p.address_raw AS address, p.borough,
                           d.asset_type, d.sale_price, d.source_system, d.created_at, d.updated_at
-                        FROM deals d JOIN properties p USING (property_id)
+                        FROM sbi_deals d JOIN sbi_properties p USING (property_id)
                         WHERE d.created_at > now() - (%s || ' days')::interval
                            OR d.updated_at > now() - (%s || ' days')::interval
                         ORDER BY greatest(d.created_at, d.updated_at) DESC LIMIT %s""",
@@ -214,24 +203,15 @@ def recent_changes(days: int = 7, limit: int = 50):
         return {"days": days, "deals": rows(cur)}
 
 
-# ── guarded escape hatch ────────────────────────────────────────────────────
-_ALLOWED_TABLES = {"deals", "properties", "entities", "entity_aliases", "deal_parties",
-                   "contacts", "interactions", "review_queue", "exclusion_ledger",
-                   "fetch_ledger", "scrape_runs"}
+_ALLOWED_TABLES = {"sbi_deals", "sbi_properties", "sbi_entities", "sbi_entity_aliases", "sbi_deal_parties",
+                   "sbi_contacts", "sbi_interactions", "sbi_review_queue", "sbi_exclusion_ledger",
+                   "sbi_fetch_ledger", "sbi_source_runs", "sbi_uploads", "sbi_upload_rows"}
 _FORBIDDEN = re.compile(r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|"
                         r"copy|call|do|merge|vacuum|reindex|comment|set_config|pg_sleep|"
                         r"pg_read_file|pg_ls_dir|dblink|lo_import)\b", re.IGNORECASE)
 
 
 def run_readonly_sql(sql: str, limit: int = 200):
-    """SELECT-only, single statement, allowlisted tables, hard LIMIT, 5s timeout,
-    READ ONLY transaction. Anything else is refused with the reason — never
-    executed 'to be helpful'. This is reachable from an LLM-planned request, so
-    the guard assumes hostile input:
-      - any ';' rejects (psycopg2 executes multi-statement strings; the old
-        \\b;\\b regex never matched a normal 'SELECT 1; SELECT ...')
-      - any '\"' rejects (quoted identifiers like \"app_config\" dodged the
-        table allowlist regex entirely)"""
     s = sql.strip().rstrip(";").strip()
     if not re.match(r"(?is)^\s*(select|with)\b", s):
         return {"error": "Only SELECT/WITH queries are permitted."}
@@ -257,50 +237,20 @@ def run_readonly_sql(sql: str, limit: int = 200):
             return {"error": f"Query failed: {str(e)[:300]}"}
 
 
-# ── registry: name -> (callable, JSON-schema for the LLM) ───────────────────
 TOOLS = {
-    "lookup_contact": (lookup_contact, {
-        "description": "Get phone/email/mailing address for an owner or company by name. Returns has_contact=false when nothing is on file (public records cap at mailing addresses).",
-        "parameters": {"type": "object", "properties": {"entity_name": {"type": "string"}}, "required": ["entity_name"]}}),
-    "last_interaction": (last_interaction, {
-        "description": "When we last contacted an entity, and recent interaction history.",
-        "parameters": {"type": "object", "properties": {"entity_name": {"type": "string"}}, "required": ["entity_name"]}}),
-    "buyer_leaderboard": (buyer_leaderboard, {
-        "description": "Top buyers by deal count or dollar volume, filterable by asset_type, borough, price range, and since-date.",
-        "parameters": {"type": "object", "properties": {
-            "asset_type": {"type": "string"}, "borough": {"type": "string"},
-            "price_min": {"type": "number"}, "price_max": {"type": "number"},
-            "since": {"type": "string", "description": "ISO date"},
-            "rank_by": {"type": "string", "enum": ["count", "vol"]}}}}),
-    "find_similar_buyers": (find_similar_buyers, {
-        "description": "Best-fit buyers for a property profile, scored on real track record (asset/borough/price-band/keyword match + recurrence). Single-purpose LLCs are discounted. Use for 'who's the best buyer for X'.",
-        "parameters": {"type": "object", "properties": {
-            "asset_type": {"type": "string"}, "borough": {"type": "string"},
-            "price": {"type": "number"}, "keywords": {"type": "array", "items": {"type": "string"}}}}}),
-    "entity_history": (entity_history, {
-        "description": "Full deal history for a buyer/seller by name.",
-        "parameters": {"type": "object", "properties": {
-            "entity_name": {"type": "string"}, "role": {"type": "string", "enum": ["buyer", "seller"]}},
-            "required": ["entity_name"]}}),
-    "seller_owners_of_similar": (seller_owners_of_similar, {
-        "description": "Sellers who have transacted a given asset type / borough — for off-market sourcing.",
-        "parameters": {"type": "object", "properties": {
-            "asset_type": {"type": "string"}, "borough": {"type": "string"}}}}),
-    "missing_contact_report": (missing_contact_report, {
-        "description": "Active buyers (>= min_deals) with NO phone/email on file — the contact-gap worklist.",
-        "parameters": {"type": "object", "properties": {
-            "asset_type": {"type": "string"}, "borough": {"type": "string"}, "min_deals": {"type": "integer"}}}}),
-    "recent_changes": (recent_changes, {
-        "description": "Deals added or updated in the last N days.",
-        "parameters": {"type": "object", "properties": {"days": {"type": "integer"}}}}),
-    "run_readonly_sql": (run_readonly_sql, {
-        "description": "Escape hatch for long-tail questions the named tools don't cover. SELECT-only, allowlisted tables, auto-LIMIT. Prefer a named tool when one fits.",
-        "parameters": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}}),
+    "lookup_contact": (lookup_contact, {"description": "Get phone/email/mailing address for an owner or company by name. Returns has_contact=false when nothing is on file.", "parameters": {"type": "object", "properties": {"entity_name": {"type": "string"}}, "required": ["entity_name"]}}),
+    "last_interaction": (last_interaction, {"description": "When we last contacted an entity, and recent interaction history.", "parameters": {"type": "object", "properties": {"entity_name": {"type": "string"}}, "required": ["entity_name"]}}),
+    "buyer_leaderboard": (buyer_leaderboard, {"description": "Top buyers by deal count or dollar volume, filterable by asset_type, borough, price range, and since-date.", "parameters": {"type": "object", "properties": {"asset_type": {"type": "string"}, "borough": {"type": "string"}, "price_min": {"type": "number"}, "price_max": {"type": "number"}, "since": {"type": "string"}, "rank_by": {"type": "string", "enum": ["count", "vol"]}}}}),
+    "find_similar_buyers": (find_similar_buyers, {"description": "Best-fit buyers for a property profile, scored on real track record.", "parameters": {"type": "object", "properties": {"asset_type": {"type": "string"}, "borough": {"type": "string"}, "price": {"type": "number"}, "keywords": {"type": "array", "items": {"type": "string"}}}}}),
+    "entity_history": (entity_history, {"description": "Full deal history for a buyer/seller by name.", "parameters": {"type": "object", "properties": {"entity_name": {"type": "string"}, "role": {"type": "string", "enum": ["buyer", "seller"]}}, "required": ["entity_name"]}}),
+    "seller_owners_of_similar": (seller_owners_of_similar, {"description": "Sellers who have transacted a given asset type / borough.", "parameters": {"type": "object", "properties": {"asset_type": {"type": "string"}, "borough": {"type": "string"}}}}),
+    "missing_contact_report": (missing_contact_report, {"description": "Active buyers with no phone/email on file.", "parameters": {"type": "object", "properties": {"asset_type": {"type": "string"}, "borough": {"type": "string"}, "min_deals": {"type": "integer"}}}}),
+    "recent_changes": (recent_changes, {"description": "Deals added or updated in the last N days.", "parameters": {"type": "object", "properties": {"days": {"type": "integer"}}}}),
+    "run_readonly_sql": (run_readonly_sql, {"description": "Escape hatch for long-tail questions. SELECT-only over sbi_* allowlisted tables.", "parameters": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}}),
 }
 
 
 def tool_specs():
-    """OpenAI-style tools array for the LLM."""
     return [{"type": "function", "function": {"name": name, **spec}} for name, (_, spec) in TOOLS.items()]
 
 
