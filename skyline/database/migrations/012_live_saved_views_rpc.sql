@@ -25,11 +25,14 @@ begin
   if api_save_view.surface not in ('deals','buyers','properties','outreach','audit') then
     return jsonb_build_object('error', 'invalid saved-view surface');
   end if;
-  insert into public.sbi_saved_views(user_id, name, surface, filters, sort)
-  values(coalesce(api_save_view.user_id, 'broker'), trim(api_save_view.name), api_save_view.surface, coalesce(api_save_view.filters, '{}'::jsonb), coalesce(api_save_view.sort, '{}'::jsonb))
-  on conflict (user_id, surface, name)
-  do update set filters=excluded.filters, sort=excluded.sort, updated_at=now()
-  returning to_jsonb(public.sbi_saved_views.*) into out_view;
+  with upserted as (
+    insert into public.sbi_saved_views(user_id, name, surface, filters, sort)
+    values(coalesce(api_save_view.user_id, 'broker'), trim(api_save_view.name), api_save_view.surface, coalesce(api_save_view.filters, '{}'::jsonb), coalesce(api_save_view.sort, '{}'::jsonb))
+    on conflict (user_id, surface, name)
+    do update set filters=excluded.filters, sort=excluded.sort, updated_at=now()
+    returning *
+  )
+  select to_jsonb(upserted.*) into out_view from upserted;
   return jsonb_build_object('view', out_view);
 end;
 $$;
