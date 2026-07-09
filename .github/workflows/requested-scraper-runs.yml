@@ -30,16 +30,16 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.ENABLE_REQUESTED_SCRAPER_WORKER == 'true'
     timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
       SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require DATABASE_URL secret
+      - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::DATABASE_URL repo secret is not set. Use the Supabase session pooler connection string."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Use the Supabase session-pooler connection string."
             exit 1
           fi
 
