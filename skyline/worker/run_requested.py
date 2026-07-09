@@ -1,9 +1,9 @@
 """Claim and execute scraper requests created by the frontend Scrapers tab.
 
-The Netlify Scrapers tab writes request rows into sbi_source_runs. Because
-sbi_source_runs only allows operational statuses, a queued frontend request is
-stored as status='running' with stats.requested_status='requested'. This worker
-claims those rows and dispatches the live worker modules.
+The Netlify/Supabase Scrapers tab writes request rows into sbi_source_runs using
+api_request_scrape(). This worker claims those durable requests and dispatches
+the Python scraper modules. Netlify remains the control panel; Python remains the
+runtime for scraping, normalization, ledgers, and gated merges.
 """
 import argparse
 import json
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from worker import sbi_store as store
 
-SUPPORTED = {"traded_refresh", "acris_refresh", "property_owner_refresh", "full_refresh"}
+SUPPORTED = {"traded_refresh", "acris_refresh", "crexi_refresh", "property_owner_refresh", "full_refresh"}
 RUNS_TABLE = "sbi_source_runs"
 
 
@@ -46,7 +46,10 @@ def claim(conn, only_job=None):
             except Exception:
                 stats = {}
         stats["requested_status"] = "claimed"
-        cur.execute(f"UPDATE {RUNS_TABLE} SET stats=%s WHERE run_id=%s", (json.dumps(stats), run_id))
+        cur.execute(
+            f"UPDATE {RUNS_TABLE} SET stats=%s, source='python-worker' WHERE run_id=%s",
+            (json.dumps(stats), run_id),
+        )
         return {"run_id": run_id, "job": job, "stats": stats}
 
 
@@ -55,27 +58,64 @@ def finish(conn, run_id, status, stats=None, error=None):
     conn.commit()
 
 
+def _limit(options):
+    value = (options or {}).get("limit") or (options or {}).get("max_records")
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return value if isinstance(value, int) else None
+
+
 def run_traded(limit=None):
     from worker import run_incremental
     return run_incremental.run(limit=limit)
 
 
-def run_acris(limit=None):
+def run_acris_fresh(limit=None):
+    from worker import phase3_fresh
+    return phase3_fresh.run(limit=limit)
+
+
+def run_owner_enrichment(limit=None):
     from worker import phase2_stages
     return phase2_stages.run(limit=limit)
 
 
+def run_rolling(batch=None):
+    from worker import rolling_sales
+    return rolling_sales.run(batch=batch or int(os.environ.get("ROLLING_BATCH", "400")))
+
+
+def run_crexi(limit=None, options=None):
+    from worker import crexi_refresh
+    options = options or {}
+    return crexi_refresh.run(dataset_id=options.get("datasetId") or options.get("dataset_id"), limit=limit)
+
+
 def execute(job, options=None):
     options = options or {}
-    limit = options.get("limit") or options.get("max_records")
-    if isinstance(limit, str) and limit.isdigit():
-        limit = int(limit)
+    limit = _limit(options)
     if job == "traded_refresh":
         return {"traded_refresh": run_traded(limit=limit)}
-    if job in ("acris_refresh", "property_owner_refresh"):
-        return {job: run_acris(limit=limit)}
+    if job == "acris_refresh":
+        return {"acris_refresh": run_acris_fresh(limit=limit)}
+    if job == "property_owner_refresh":
+        return {"property_owner_refresh": run_owner_enrichment(limit=limit)}
+    if job == "crexi_refresh":
+        return {"crexi_refresh": run_crexi(limit=limit, options=options)}
     if job == "full_refresh":
-        return {"traded_refresh": run_traded(limit=limit), "acris_refresh": run_acris(limit=limit)}
+        result = {
+            "traded_refresh": run_traded(limit=limit),
+            "acris_refresh": run_acris_fresh(limit=limit),
+            "rolling_sales": run_rolling(batch=options.get("rolling_batch")),
+            "property_owner_refresh": run_owner_enrichment(limit=limit),
+        }
+        # Crexi is optional because it requires APIFY_TOKEN/APIFY_CREXI_ACTOR. If
+        # configured, include it in full refresh; otherwise record a skipped status.
+        if os.environ.get("APIFY_TOKEN") or os.environ.get("APIFY_API_TOKEN"):
+            result["crexi_refresh"] = run_crexi(limit=limit, options=options)
+        else:
+            result["crexi_refresh"] = {"status": "skipped_not_configured", "reason": "APIFY_TOKEN/APIFY_CREXI_ACTOR not set"}
+        return result
     return {"error": f"Unsupported requested job: {job}"}
 
 
@@ -97,7 +137,7 @@ def run_once(only_job=None):
         try:
             result = execute(job, options=options)
             finish(conn, run_id, "success", {"requested_job": job, "result": result})
-            return {"claimed": True, "run_id": str(run_id), "job": job, "status": "success", "result": result}
+            return {"claimed": True, "run_id": str(run_id), "job": job, "status": "completed", "result": result}
         except Exception:
             err = traceback.format_exc()[:2000]
             finish(conn, run_id, "failed", {"requested_job": job}, error=err)
