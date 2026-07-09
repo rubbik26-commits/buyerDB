@@ -1,0 +1,1 @@
+Redeploy trigger after disabling the truncated Supabase REST path so Netlify API uses the full canonical dataset fallback.
