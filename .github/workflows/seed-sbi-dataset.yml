@@ -11,9 +11,20 @@ on:
         options:
           - "false"
           - "true"
+  push:
+    branches: [ACRIS]
+    paths:
+      - "skyline/scripts/migrate_csv_sbi.py"
+      - "skyline/NEW_YORK_CLOSED_ENRICHED_v8.csv"
+      - "skyline/exclusion_ledger_additions_2026-07-02.csv"
+      - ".github/workflows/seed-sbi-dataset.yml"
 
 permissions:
   contents: read
+
+concurrency:
+  group: seed-sbi-dataset
+  cancel-in-progress: false
 
 jobs:
   seed:
@@ -23,6 +34,7 @@ jobs:
         working-directory: skyline
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+      RESET_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.reset || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,7 +50,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Seed sbi dataset
         run: |
-          if [ "${{ inputs.reset }}" = "true" ]; then
+          if [ "$RESET_INPUT" = "true" ]; then
             python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv --reset
           else
             python scripts/migrate_csv_sbi.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
