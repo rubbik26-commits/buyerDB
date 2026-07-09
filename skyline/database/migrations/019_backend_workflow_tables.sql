@@ -1,5 +1,7 @@
 -- 019_backend_workflow_tables.sql
 -- Persistence tables used by the FastAPI backend workflow routes.
+-- Intentionally avoids FKs to canonical tables so it is safe in live Supabase mode,
+-- where canonical names may be views over sbi_* tables.
 
 BEGIN;
 
@@ -18,7 +20,7 @@ CREATE INDEX IF NOT EXISTS saved_views_user_surface ON saved_views (user_id, sur
 
 CREATE TABLE IF NOT EXISTS outreach_drafts (
   draft_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  entity_id uuid REFERENCES entities(entity_id),
+  entity_id uuid,
   user_id text NOT NULL DEFAULT 'broker',
   property_summary text,
   subject text NOT NULL,
