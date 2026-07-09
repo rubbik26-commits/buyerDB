@@ -25,16 +25,16 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.ENABLE_LEGACY_WORKER == 'true'
     timeout-minutes: 120
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
       SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require DATABASE_URL secret
+      - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::The DATABASE_URL repo secret is not set. Add it under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard (Connect button) — the direct db.*.supabase.co host is IPv6-only and unreachable from Actions runners."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add one under Settings → Secrets and variables → Actions → New repository secret. Use the SESSION POOLER connection string from the Supabase dashboard Connect button."
             exit 1
           fi
 
