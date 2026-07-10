@@ -1,0 +1,24 @@
+name: package-production-source
+
+on:
+  pull_request:
+    branches: [ACRIS]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package Netlify production source
+        uses: actions/upload-artifact@v4
+        with:
+          name: buyerdb-production-package
+          path: |
+            netlify.toml
+            skyline/frontend
+            !skyline/frontend/node_modules
+          if-no-files-found: error
