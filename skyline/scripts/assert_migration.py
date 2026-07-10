@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.normalize import is_placeholder, norm_entity
 
 DB = os.environ.get("DATABASE_URL", "postgresql://skyline:skyline_dev@localhost/skyline")
+NYC_BOROUGHS = {"Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"}
 
 
 def _party_count(series):
@@ -20,7 +21,8 @@ def _party_count(series):
 
 
 def main(csv_path):
-    df = pd.read_csv(csv_path, low_memory=False)
+    raw = pd.read_csv(csv_path, low_memory=False)
+    df = raw[raw["Borough"].isin(NYC_BOROUGHS)].copy()
     conn = psycopg2.connect(DB); cur = conn.cursor()
     q = lambda sql: (cur.execute(sql), cur.fetchone()[0])[1]
 
@@ -30,6 +32,7 @@ def main(csv_path):
         checks.append(ok)
         print(f"{'PASS' if ok else 'FAIL'} - {name}: got {got}, want {want}")
 
+    check("non-NYC rows excluded", len(raw) - len(df), 24)
     check("deal count", q("SELECT count(*) FROM deals"), len(df))
     check("deals with a buyer party",
           q("SELECT count(DISTINCT deal_id) FROM deal_parties WHERE role='buyer'"),
@@ -45,7 +48,7 @@ def main(csv_path):
           int((df["Parse Status"] == "needs_review").sum()))
     check("banned asset types present", q(
         "SELECT count(*) FROM deals WHERE asset_type IN "
-        "('Condo','Commercial Condo','Co-op','Single Family','Two Family')"), 0)
+        "('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')"), 0)
     check("acris party rows without gate", q(
         "SELECT count(*) FROM deal_parties WHERE source_system='acris' AND amount_gate_passed IS NOT TRUE"), 0)
     got_excl = q("SELECT count(*) FROM exclusion_ledger")
