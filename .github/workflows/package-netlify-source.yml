@@ -1,0 +1,29 @@
+name: package-netlify-source
+
+on:
+  push:
+    branches: [ACRIS]
+    paths:
+      - "netlify.toml"
+      - "skyline/frontend/**"
+      - ".github/workflows/package-netlify-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package exact Netlify source
+        uses: actions/upload-artifact@v4
+        with:
+          name: buyerdb-netlify-source-${{ github.sha }}
+          path: |
+            netlify.toml
+            skyline/frontend
+          if-no-files-found: error
+          retention-days: 1
