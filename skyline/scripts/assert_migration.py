@@ -14,8 +14,7 @@ NYC_BOROUGHS = {"Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"}
 
 def _party_count(series):
     """Expected parties mirror migrate_csv's skip rules: placeholder names and
-    names that normalize to nothing never become deal_parties rows — counting
-    them made a CORRECT migration fail these assertions."""
+    names that normalize to nothing never become deal_parties rows."""
     return int(series.dropna().map(lambda x: not is_placeholder(str(x))
                                    and norm_entity(str(x)) is not None).sum())
 
@@ -24,6 +23,7 @@ def main(csv_path):
     raw = pd.read_csv(csv_path, low_memory=False)
     borough = raw["Borough"]
     df = raw[borough.isna() | borough.isin(NYC_BOROUGHS)].copy()
+    dropped_non_nyc = len(raw) - len(df)
     conn = psycopg2.connect(DB); cur = conn.cursor()
     q = lambda sql: (cur.execute(sql), cur.fetchone()[0])[1]
 
@@ -33,7 +33,10 @@ def main(csv_path):
         checks.append(ok)
         print(f"{'PASS' if ok else 'FAIL'} - {name}: got {got}, want {want}")
 
-    check("explicit non-NYC rows excluded", len(raw) - len(df), 24)
+    print(f"INFO - explicit non-NYC source rows excluded: {dropped_non_nyc}")
+    check("invalid boroughs inserted", q(
+        "SELECT count(*) FROM properties WHERE borough IS NOT NULL AND borough NOT IN "
+        "('Manhattan','Brooklyn','Queens','Bronx','Staten Island')"), 0)
     check("deal count", q("SELECT count(*) FROM deals"), len(df))
     check("deals with a buyer party",
           q("SELECT count(DISTINCT deal_id) FROM deal_parties WHERE role='buyer'"),
