@@ -1,1 +1,2 @@
-Production deployment trigger for buyerdb.netlify.app using the database-backed Supabase RPC Deal Desk build.
+Production deployment trigger for buyerdb.netlify.app using the verified database-backed Supabase RPC Deal Desk build.
+Requested publish: 2026-07-10T03:00:00Z.
