@@ -1,0 +1,32 @@
+name: package-production-source
+
+on:
+  push:
+    branches: [production-package-20260710]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record exact source revision
+        run: |
+          printf '%s\n' "$GITHUB_SHA" > PRODUCTION_SOURCE_SHA.txt
+          git status --short
+      - name: Upload exact repository source
+        uses: actions/upload-artifact@v4
+        with:
+          name: buyerdb-current-production-source
+          path: |
+            .
+            !.git/**
+            !**/node_modules/**
+            !**/.env
+            !**/.env.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
