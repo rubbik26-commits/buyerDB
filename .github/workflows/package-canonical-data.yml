@@ -1,0 +1,22 @@
+name: package-canonical-data
+
+on:
+  pull_request:
+    branches: [ACRIS]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package canonical data files
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-data-package
+          path: |
+            skyline/NEW_YORK_CLOSED_ENRICHED_v8.csv
+            skyline/exclusion_ledger_additions_2026-07-02.csv
+          if-no-files-found: error
