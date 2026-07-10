@@ -1,6 +1,8 @@
 import type { Config, Context } from "@netlify/functions";
 
-const AGENT_BUILD = "supabase-rpc-agent-2026-07-10-v2";
+const AGENT_BUILD = "supabase-rpc-agent-2026-07-10-v3";
+const LIVE_SUPABASE_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co";
+const LIVE_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w";
 const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
 
 export default async (req: Request, _context: Context) => {
@@ -55,9 +57,11 @@ export default async (req: Request, _context: Context) => {
 export const config: Config = { path: "/api/agent" };
 
 async function rpc(fn: string, args: Record<string, unknown>) {
-  const base = env("SUPABASE_URL") || env("VITE_API_URL") || "https://pdvyuepsdnpxctmagdcq.supabase.co";
-  const key = env("SUPABASE_ANON_KEY") || env("VITE_SUPABASE_ANON_KEY");
-  if (!key) throw new Error("SUPABASE_ANON_KEY or VITE_SUPABASE_ANON_KEY is not configured for Netlify Functions");
+  const configuredBase = env("SUPABASE_URL") || env("VITE_API_URL");
+  const base = configuredBase.includes("pdvyuepsdnpxctmagdcq") ? configuredBase : LIVE_SUPABASE_URL;
+  const configuredKey = env("VITE_SUPABASE_ANON_KEY") || env("SUPABASE_ANON_KEY");
+  const key = base.includes("pdvyuepsdnpxctmagdcq") ? LIVE_SUPABASE_PUBLISHABLE_KEY : configuredKey;
+  if (!key) throw new Error("Supabase publishable key is not configured");
   const res = await fetch(`${base.replace(/\/$/, "")}/rest/v1/rpc/${fn}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
