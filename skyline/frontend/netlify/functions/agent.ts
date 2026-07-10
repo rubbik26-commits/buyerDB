@@ -1,25 +1,27 @@
 import type { Config, Context } from "@netlify/functions";
 
+const AGENT_BUILD = "supabase-rpc-agent-2026-07-10-v2";
 const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
 
 export default async (req: Request, _context: Context) => {
-  if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (req.method !== "POST") return json({ error: "method_not_allowed", build: AGENT_BUILD }, 405);
 
   let body: any = {};
-  try { body = await req.json(); } catch { return json({ error: "invalid_json" }, 400); }
+  try { body = await req.json(); } catch { return json({ error: "invalid_json", build: AGENT_BUILD }, 400); }
 
   const question = String(body.question || "").trim();
-  if (!question) return json({ error: "missing_question" }, 400);
+  if (!question) return json({ error: "missing_question", build: AGENT_BUILD }, 400);
 
   try {
     const q = question.toLowerCase();
 
     if (q.includes("buyer")) {
+      const price = priceFrom(question);
       const args = {
         borough: boroughFrom(question),
         asset_type: assetFrom(question),
-        price_min: priceFrom(question) ? Math.round(priceFrom(question)! * 0.5) : null,
-        price_max: priceFrom(question) ? Math.round(priceFrom(question)! * 1.5) : null,
+        price_min: price ? Math.round(price * 0.5) : null,
+        price_max: price ? Math.round(price * 1.5) : null,
         min_deals: 1,
         lim: 10,
       };
@@ -28,7 +30,7 @@ export default async (req: Request, _context: Context) => {
       const answer = buyers.length
         ? buyers.slice(0, 10).map((b: any, i: number) => `${i + 1}. ${b.name} — ${Number(b.n || 0).toLocaleString()} deals, ${money(b.vol)} total volume${b.has_contact ? ", contact on file" : ", no contact on file"}`).join("\n")
         : "No matching buyers were returned by the live database for those criteria.";
-      return json({ tool: "api_buyers", arguments: args, result: { candidates: buyers }, answer, providers: { plan: "deterministic", synthesis: "deterministic" } });
+      return json({ build: AGENT_BUILD, tool: "api_buyers", arguments: args, result: { candidates: buyers }, answer, providers: { plan: "supabase-rpc", synthesis: "deterministic" } });
     }
 
     if (q.includes("phone") || q.includes("email") || q.includes("contact")) {
@@ -36,7 +38,7 @@ export default async (req: Request, _context: Context) => {
       const result = await rpc("api_contact_search", { q: term, lim: 10 });
       const matches = Array.isArray(result?.matches) ? result.matches : [];
       const lines = matches.flatMap((m: any) => (m.contacts || []).map((c: any) => `${m.name}: ${c.phone || "no phone"} / ${c.email || "no email"}`));
-      return json({ tool: "api_contact_search", arguments: { q: term, lim: 10 }, result, answer: lines.length ? lines.join("\n") : `No phone or email is on file for ${term || "that entity"}.`, providers: { plan: "deterministic", synthesis: "deterministic" } });
+      return json({ build: AGENT_BUILD, tool: "api_contact_search", arguments: { q: term, lim: 10 }, result, answer: lines.length ? lines.join("\n") : `No phone or email is on file for ${term || "that entity"}.`, providers: { plan: "supabase-rpc", synthesis: "deterministic" } });
     }
 
     const result = await rpc("api_recent_deals", { q: question, lim: 10 });
@@ -44,9 +46,9 @@ export default async (req: Request, _context: Context) => {
     const answer = deals.length
       ? deals.map((d: any, i: number) => `${i + 1}. ${d.address || "Unknown address"} — ${d.asset_type || "asset"} — ${money(d.sale_price)} — buyer: ${d.buyer || "unknown"}`).join("\n")
       : "No matching deal rows were returned by the live database.";
-    return json({ tool: "api_recent_deals", arguments: { q: question, lim: 10 }, result, answer, providers: { plan: "deterministic", synthesis: "deterministic" } });
+    return json({ build: AGENT_BUILD, tool: "api_recent_deals", arguments: { q: question, lim: 10 }, result, answer, providers: { plan: "supabase-rpc", synthesis: "deterministic" } });
   } catch (err: any) {
-    return json({ error: "agent_database_query_failed", detail: err?.message || String(err) }, 500);
+    return json({ error: "agent_database_query_failed", detail: err?.message || String(err), build: AGENT_BUILD }, 500);
   }
 };
 
