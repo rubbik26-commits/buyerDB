@@ -3,12 +3,13 @@ const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "
 
 export function config() {
   const url = (env("SUPABASE_URL") || env("VITE_API_URL")).replace(/\/$/, "");
-  const key = env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_SERVICE_KEY");
-  if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for scraper execution.");
-  return { url, key };
+  const key = env("SUPABASE_PUBLISHABLE_KEY") || env("SUPABASE_ANON_KEY") || env("VITE_SUPABASE_ANON_KEY");
+  const runtimeSecret = env("SCRAPER_TRIGGER_SECRET") || env("SYNC_SECRET") || env("CRON_SECRET") || env("SUPABASE_JWT_SECRET");
+  if (!url || !key) throw new Error("The Supabase URL/public key is not configured for the Netlify runtime.");
+  return { url, key, runtimeSecret };
 }
 
-export async function rpc(name: string, body: Json = {}) {
+async function rawRpc(name: string, body: Json = {}) {
   const { url, key } = config();
   const response = await fetch(`${url}/rest/v1/rpc/${name}`, {
     method: "POST",
@@ -20,36 +21,45 @@ export async function rpc(name: string, body: Json = {}) {
   return text ? JSON.parse(text) : {};
 }
 
-export async function table(path: string, init: RequestInit = {}) {
-  const { url, key } = config();
-  const headers = new Headers(init.headers || {});
-  headers.set("apikey", key);
-  headers.set("Authorization", `Bearer ${key}`);
-  if (init.body) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${url}/rest/v1/${path}`, { ...init, headers });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`${path} HTTP ${response.status}: ${text.slice(0, 500)}`);
-  return text ? JSON.parse(text) : null;
+export async function runtimeRpc(name: string, body: Json = {}) {
+  const { runtimeSecret } = config();
+  if (!runtimeSecret) throw new Error("The Netlify scraper runtime credential is not configured.");
+  return rawRpc(name, { p_secret: runtimeSecret, ...body });
+}
+
+export async function rpc(name: string, body: Json = {}) {
+  if (name === "api_request_scrape") {
+    return runtimeRpc("sbi_runtime_request_run", { p_job: body.job, p_user_id: body.user_id, p_options: body.options || {} });
+  }
+  if (name === "sync_upsert_deals") return runtimeRpc("sbi_runtime_sync", { p_rows: body.rows || [] });
+  if (name === "upsert_broker_contacts") return runtimeRpc("sbi_runtime_broker_contacts", { p_rows: body.rows || [] });
+  if (name === "sbi_rolling_targets") return runtimeRpc("sbi_runtime_rolling_targets", { p_lim: body.lim || 400 });
+  if (name === "sbi_rolling_apply") return runtimeRpc("sbi_runtime_rolling_apply", body);
+  if (name === "sbi_phase2_targets") return runtimeRpc("sbi_runtime_phase2_targets", { p_lim: body.lim || 400 });
+  if (name === "sbi_apply_acris_party_fill") return runtimeRpc("sbi_runtime_phase2_apply", body);
+  return rawRpc(name, body);
 }
 
 export async function updateRun(runId: string, status: string, stats: Json = {}, error: string | null = null) {
-  await table(`sbi_source_runs?run_id=eq.${encodeURIComponent(runId)}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({
-      status,
-      stats,
-      error,
-      ...(status === "running" ? { started_at: new Date().toISOString() } : { finished_at: new Date().toISOString() }),
-    }),
+  return runtimeRpc("sbi_runtime_update_run", {
+    p_run_id: runId,
+    p_status: status,
+    p_stats: stats,
+    p_error: error,
   });
 }
 
 export async function invokeEdge(name: string, body: Json, extraHeaders: Record<string, string> = {}) {
-  const { url, key } = config();
+  const { url, key, runtimeSecret } = config();
   const response = await fetch(`${url}/functions/v1/${name}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...extraHeaders },
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      ...(runtimeSecret ? { "x-runtime-secret": runtimeSecret } : {}),
+      ...extraHeaders,
+    },
     body: JSON.stringify(body),
   });
   const text = await response.text();

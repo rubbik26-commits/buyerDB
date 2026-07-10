@@ -1,4 +1,4 @@
-import { rpc, type Json } from "./supabase.mts";
+import { runtimeRpc, type Json } from "./supabase.mts";
 import { BOROUGH_CODE, canonStreet, dayDistance, keyToken, quote, splitAddress } from "./normalize.mts";
 import { socrata } from "./socrata.mts";
 
@@ -15,7 +15,7 @@ async function fetchParties(documentId: string) {
 
 export async function runPhase2(options: Json = {}) {
   const limit = Math.max(1, Math.min(1000, Number(options.limit || 400)));
-  const targets = await rpc("sbi_phase2_targets", { lim: limit });
+  const targets = await runtimeRpc("sbi_runtime_phase2_targets", { p_lim: limit });
   const stats: Json = { targets: targets.length, legals_hit: 0, matched: 0, filled: 0, gated_out: 0, no_legals: 0, no_match: 0, fetch_errors: 0 };
   for (const target of targets) {
     const [number, street] = splitAddress(target.address_raw);
@@ -52,7 +52,7 @@ export async function runPhase2(options: Json = {}) {
       if (!match) { stats.no_match++; continue; }
       stats.matched++;
       const parties = await fetchParties(match.document_id);
-      const result = await rpc("sbi_apply_acris_party_fill", {
+      const result = await runtimeRpc("sbi_runtime_phase2_apply", {
         p_deal_id: target.deal_id,
         p_doc_id: match.document_id,
         p_deed_amount: Number(match.document_amt),
