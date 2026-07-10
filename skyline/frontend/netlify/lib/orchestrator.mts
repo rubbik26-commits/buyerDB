@@ -48,5 +48,5 @@ export async function createRequestedRun(job: string, userId = "broker", options
 }
 
 export function triggerSecret() {
-  return getEnv("SCRAPER_TRIGGER_SECRET") || getEnv("SYNC_SECRET") || getEnv("CRON_SECRET");
+  return getEnv("SCRAPER_TRIGGER_SECRET") || getEnv("SYNC_SECRET") || getEnv("CRON_SECRET") || getEnv("SUPABASE_JWT_SECRET");
 }
