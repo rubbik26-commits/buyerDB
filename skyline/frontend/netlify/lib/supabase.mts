@@ -9,7 +9,7 @@ export function config() {
   return { url, key, runtimeSecret };
 }
 
-export async function rpc(name: string, body: Json = {}) {
+async function rawRpc(name: string, body: Json = {}) {
   const { url, key } = config();
   const response = await fetch(`${url}/rest/v1/rpc/${name}`, {
     method: "POST",
@@ -24,7 +24,20 @@ export async function rpc(name: string, body: Json = {}) {
 export async function runtimeRpc(name: string, body: Json = {}) {
   const { runtimeSecret } = config();
   if (!runtimeSecret) throw new Error("The Netlify scraper runtime credential is not configured.");
-  return rpc(name, { p_secret: runtimeSecret, ...body });
+  return rawRpc(name, { p_secret: runtimeSecret, ...body });
+}
+
+export async function rpc(name: string, body: Json = {}) {
+  if (name === "api_request_scrape") {
+    return runtimeRpc("sbi_runtime_request_run", { p_job: body.job, p_user_id: body.user_id, p_options: body.options || {} });
+  }
+  if (name === "sync_upsert_deals") return runtimeRpc("sbi_runtime_sync", { p_rows: body.rows || [] });
+  if (name === "upsert_broker_contacts") return runtimeRpc("sbi_runtime_broker_contacts", { p_rows: body.rows || [] });
+  if (name === "sbi_rolling_targets") return runtimeRpc("sbi_runtime_rolling_targets", { p_lim: body.lim || 400 });
+  if (name === "sbi_rolling_apply") return runtimeRpc("sbi_runtime_rolling_apply", body);
+  if (name === "sbi_phase2_targets") return runtimeRpc("sbi_runtime_phase2_targets", { p_lim: body.lim || 400 });
+  if (name === "sbi_apply_acris_party_fill") return runtimeRpc("sbi_runtime_phase2_apply", body);
+  return rawRpc(name, body);
 }
 
 export async function updateRun(runId: string, status: string, stats: Json = {}, error: string | null = null) {
