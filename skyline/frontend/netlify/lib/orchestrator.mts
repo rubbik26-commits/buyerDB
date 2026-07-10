@@ -47,4 +47,6 @@ export async function createRequestedRun(job: string, userId = "broker", options
   return rpc("api_request_scrape", { job, user_id: userId, options });
 }
 
-export function triggerSecret() { return getEnv("SCRAPER_TRIGGER_SECRET"); }
+export function triggerSecret() {
+  return getEnv("SCRAPER_TRIGGER_SECRET") || getEnv("SYNC_SECRET") || getEnv("CRON_SECRET");
+}
