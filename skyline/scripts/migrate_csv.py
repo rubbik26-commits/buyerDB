@@ -4,7 +4,7 @@ Usage: python3 scripts/migrate_csv.py <dataset_v8.csv> [exclusion_additions.csv]
 Env:   DATABASE_URL
 
 Rules enforced here (same as the pipeline):
-  * only Manhattan, Brooklyn, Queens, Bronx, and Staten Island enter the NYC ledger
+  * explicit non-NYC boroughs are excluded; unknown borough rows remain reviewable
   * provenance parsed from Notes into deal_parties.source_system / provenance_ref;
     'parties from ACRIS <doc> (amount[-gated])' -> source_system='acris',
     amount_gate_passed=True (the phase-1/2 matchers only emitted amount-passing
@@ -40,7 +40,8 @@ def src_system(url):
 
 def main(csv_path, exclusions_path=None, force=False):
     raw = pd.read_csv(csv_path, low_memory=False)
-    df = raw[raw["Borough"].isin(NYC_BOROUGHS)].copy()
+    borough = raw["Borough"]
+    df = raw[borough.isna() | borough.isin(NYC_BOROUGHS)].copy()
     dropped = len(raw) - len(df)
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
