@@ -1,11 +1,9 @@
-name: package-netlify-source
+name: package-full-audit-source
 
 on:
-  push:
+  pull_request:
     branches: [ACRIS]
     paths:
-      - "netlify.toml"
-      - "skyline/frontend/**"
       - ".github/workflows/package-netlify-source.yml"
   pull_request:
     branches: [ACRIS]
@@ -21,15 +19,14 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Package exact Netlify source
+      - name: Package exact repository source
         uses: actions/upload-artifact@v4
         with:
-          name: buyerdb-netlify-source-${{ github.sha }}
-          path: |
-            netlify.toml
-            skyline/frontend
+          name: buyerdb-full-audit-${{ github.sha }}
+          path: .
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
