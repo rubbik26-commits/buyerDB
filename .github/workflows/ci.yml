@@ -45,11 +45,19 @@ jobs:
       - name: Apply the Python worker schema
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/001_schema.sql
       - name: Load canonical dataset
-        run: python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv | tee /tmp/migrate.log
+        id: migration_load
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv 2>&1 | tee /tmp/migrate.log
       - name: Assert canonical migration
         id: migration_assert
         continue-on-error: true
-        run: python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv | tee /tmp/assert-migration.log
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv 2>&1 | tee /tmp/assert-migration.log
       - name: Upload migration diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,20 +67,39 @@ jobs:
             /tmp/migrate.log
             /tmp/assert-migration.log
           if-no-files-found: error
-      - name: Fail when canonical migration assertions fail
-        if: steps.migration_assert.outcome != 'success'
+      - name: Fail when canonical migration fails
+        if: steps.migration_load.outcome != 'success' || steps.migration_assert.outcome != 'success'
         run: exit 1
       - name: Test proven worker invariants
-        run: >-
-          python -m pytest
-          worker/test_store.py
-          worker/test_run_incremental.py
-          worker/test_phase2_enrichment.py
-          worker/test_phase3_fresh.py
-          worker/test_rolling_sales.py
-          -q
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest \
+            worker/test_store.py \
+            worker/test_run_incremental.py \
+            worker/test_phase2_enrichment.py \
+            worker/test_phase3_fresh.py \
+            worker/test_rolling_sales.py \
+            -q 2>&1 | tee /tmp/worker-tests.log
       - name: Test backend provider and tool services
-        run: python -m pytest backend/tests -q
+        id: backend_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest backend/tests -q 2>&1 | tee /tmp/backend-tests.log
+      - name: Upload backend test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-diagnostics
+          path: |
+            /tmp/worker-tests.log
+            /tmp/backend-tests.log
+          if-no-files-found: warn
+      - name: Fail when backend tests fail
+        if: steps.backend_tests.outcome != 'success'
+        run: exit 1
 
   frontend:
     runs-on: ubuntu-latest
