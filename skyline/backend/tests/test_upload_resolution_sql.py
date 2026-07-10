@@ -9,6 +9,7 @@ import os
 import uuid
 
 import psycopg2
+import pytest
 
 
 def _one(cur, sql, params=()):
@@ -20,6 +21,12 @@ def test_upload_resolution_requires_review_then_rematches_by_name_and_alias():
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     conn.autocommit = False
     cur = conn.cursor()
+    cur.execute("select to_regprocedure('public.api_upload_stage(text,text,jsonb,jsonb,jsonb)')")
+    if cur.fetchone()[0] is None:
+        cur.close()
+        conn.close()
+        pytest.skip("SBI upload schema is prepared by the dedicated upload-resolution workflow")
+
     tag = uuid.uuid4().hex[:10].upper()
     exact_name = f"SKYLINE UPLOAD TEST HOLDINGS {tag}"
     fuzzy_name = f"SKYLINE UPLOD TEST HOLDINGS {tag}"
