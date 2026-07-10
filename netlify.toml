@@ -1,4 +1,4 @@
-# deploy-marker: blueprint-rebuild-2026-07-10-production
+# deploy-marker: blueprint-rebuild-2026-07-10-public-rpc-runtime
 [build]
   base = "skyline/frontend"
   command = "npm ci && npm run build"
@@ -7,11 +7,31 @@
 [build.environment]
   VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
   VITE_USE_SUPABASE_RPC = "true"
+  VITE_SUPABASE_ANON_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
+  SUPABASE_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  SUPABASE_PUBLISHABLE_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
   NODE_VERSION = "20"
 
 [context.production.environment]
   VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
   VITE_USE_SUPABASE_RPC = "true"
+  VITE_SUPABASE_ANON_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
+  SUPABASE_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  SUPABASE_PUBLISHABLE_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
+
+[context.deploy-preview.environment]
+  VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  VITE_USE_SUPABASE_RPC = "true"
+  VITE_SUPABASE_ANON_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
+  SUPABASE_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  SUPABASE_PUBLISHABLE_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
+
+[context.branch-deploy.environment]
+  VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  VITE_USE_SUPABASE_RPC = "true"
+  VITE_SUPABASE_ANON_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
+  SUPABASE_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
+  SUPABASE_PUBLISHABLE_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w"
 
 [functions]
   directory = "netlify/functions"
