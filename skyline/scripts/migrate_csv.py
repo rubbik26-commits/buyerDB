@@ -4,6 +4,7 @@ Usage: python3 scripts/migrate_csv.py <dataset_v8.csv> [exclusion_additions.csv]
 Env:   DATABASE_URL
 
 Rules enforced here (same as the pipeline):
+  * explicit non-NYC boroughs are excluded; unknown borough rows remain reviewable
   * provenance parsed from Notes into deal_parties.source_system / provenance_ref;
     'parties from ACRIS <doc> (amount[-gated])' -> source_system='acris',
     amount_gate_passed=True (the phase-1/2 matchers only emitted amount-passing
@@ -22,6 +23,7 @@ from shared.normalize import (norm_entity, split_address, normalize_address,
                               is_placeholder, spv_suspect, entity_type)
 
 DB = os.environ.get("DATABASE_URL", "postgresql://skyline:skyline_dev@localhost/skyline")
+NYC_BOROUGHS = {"Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"}
 
 ACRIS_DOC_RE = re.compile(r"doc_id=([A-Z0-9]+)")
 PARTIES_ACRIS_RE = re.compile(r"parties from ACRIS (\w+) \(amount(?:-gated)?\)")
@@ -37,7 +39,10 @@ def src_system(url):
 
 
 def main(csv_path, exclusions_path=None, force=False):
-    df = pd.read_csv(csv_path, low_memory=False)
+    raw = pd.read_csv(csv_path, low_memory=False)
+    borough = raw["Borough"]
+    df = raw[borough.isna() | borough.isin(NYC_BOROUGHS)].copy()
+    dropped = len(raw) - len(df)
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
 
@@ -181,7 +186,8 @@ def main(csv_path, exclusions_path=None, force=False):
 
     conn.commit()
     print(f"MIGRATED deals={n_deals} properties={len(prop_ids)} entities={len(ent_ids)} "
-          f"parties={n_parties} contacts={n_contacts} review={n_review} exclusions={n_excl}")
+          f"parties={n_parties} contacts={n_contacts} review={n_review} exclusions={n_excl} "
+          f"dropped_non_nyc={dropped}")
     conn.close()
 
 
