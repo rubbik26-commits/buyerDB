@@ -1,4 +1,5 @@
 name: temporary-publish
+run-name: direct-production-publish
 
 on:
   push:
