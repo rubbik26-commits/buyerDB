@@ -83,7 +83,45 @@ jobs:
           npm run build
       - name: Deploy frontend and functions to buyerdb production
         working-directory: skyline/frontend
-        run: npx netlify-cli deploy --prod --dir=dist --functions=netlify/functions --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "PR ${GITHUB_SHA::7}: live database-backed Deal Desk"
+        run: |
+          npx netlify-cli deploy --prod --json --dir=dist --functions=netlify/functions --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "PR ${GITHUB_SHA::7}: live database-backed Deal Desk" | tee /tmp/netlify-deploy.json
+          DEPLOY_URL=$(jq -r '.deploy_url // .url // .ssl_url // empty' /tmp/netlify-deploy.json)
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "Netlify CLI did not return a deploy URL."
+            exit 1
+          fi
+          echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"
+      - name: Smoke test deployed Deal Desk against live Supabase buyers
+        run: |
+          payload='{"question":"Who is the best buyer for a Brooklyn multifamily around $3M?"}'
+          for i in $(seq 1 20); do
+            if curl -fsS -X POST "$DEPLOY_URL/api/agent" -H 'Content-Type: application/json' -d "$payload" > /tmp/agent-response.json; then
+              break
+            fi
+            sleep 3
+          done
+          cat /tmp/agent-response.json
+          jq -e '
+            .build == "supabase-rpc-agent-2026-07-10-v3" and
+            .tool == "api_buyers" and
+            .arguments.borough == "Brooklyn" and
+            .arguments.asset_type == "Multifamily" and
+            (.result.candidates | length) > 0 and
+            (.answer | test("backend database query is required"; "i") | not)
+          ' /tmp/agent-response.json
+      - name: Verify production alias serves the same database-backed agent
+        run: |
+          payload='{"question":"Who is the best buyer for a Brooklyn multifamily around $3M?"}'
+          for i in $(seq 1 20); do
+            curl -fsS -X POST "https://buyerdb.netlify.app/api/agent" -H 'Content-Type: application/json' -d "$payload" > /tmp/production-agent-response.json || true
+            if jq -e '.build == "supabase-rpc-agent-2026-07-10-v3" and .tool == "api_buyers" and (.result.candidates | length) > 0' /tmp/production-agent-response.json >/dev/null 2>&1; then
+              cat /tmp/production-agent-response.json
+              exit 0
+            fi
+            sleep 3
+          done
+          cat /tmp/production-agent-response.json || true
+          exit 1
 
   seed-live-sbi:
     runs-on: ubuntu-latest
