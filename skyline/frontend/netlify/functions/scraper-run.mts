@@ -1,13 +1,13 @@
 import type { Config, Context } from "@netlify/functions";
 import { createRequestedRun, triggerSecret } from "../lib/orchestrator.mts";
-import { getEnv, table } from "../lib/supabase.mts";
+import { getEnv, runtimeRpc } from "../lib/supabase.mts";
 
 const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
 const JOBS = new Set(["traded_refresh", "acris_refresh", "crexi_refresh", "property_owner_refresh", "rolling_sales", "phase2_enrichment", "dos_enrich", "full_refresh"]);
 
 async function dispatch(job: string, userId: string, options: Record<string, unknown>) {
-  const recent = await table(`sbi_source_runs?select=run_id,job,status,started_at&job=eq.${encodeURIComponent(job)}&status=in.(requested,running)&started_at=gte.${encodeURIComponent(new Date(Date.now() - 30 * 60_000).toISOString())}&order=started_at.desc&limit=1`);
-  if (recent?.[0]) return { ...recent[0], deduplicated: true };
+  const recent = await runtimeRpc("sbi_runtime_active_run", { p_job: job, p_minutes: 30 });
+  if (recent?.run_id) return { ...recent, deduplicated: true };
   const requested = await createRequestedRun(job, userId, options);
   if (!requested?.run_id) throw new Error(requested?.error || `Unable to create ${job} run row.`);
   const site = getEnv("URL") || getEnv("FRONTEND_URL") || "https://buyerdb.netlify.app";
