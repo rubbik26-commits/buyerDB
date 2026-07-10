@@ -27,6 +27,7 @@ jobs:
       NETLIFY_SITE_ID: e1780534-ba0b-470e-b98f-85b29f7d32a1
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
       VITE_API_URL: ${{ vars.VITE_API_URL || 'https://pdvyuepsdnpxctmagdcq.supabase.co' }}
+      VITE_USE_SUPABASE_RPC: "true"
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -35,15 +36,19 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: skyline/frontend/package-lock.json
-      - name: Verify deploy token
+      - name: Verify deploy configuration
         run: |
           if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
             echo "Missing NETLIFY_AUTH_TOKEN secret."
             exit 1
           fi
+          if [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "Missing VITE_SUPABASE_ANON_KEY secret."
+            exit 1
+          fi
       - name: Install
         run: npm install
-      - name: Build
+      - name: Build in live Supabase RPC mode
         run: npm run build
-      - name: Deploy to Netlify production
-        run: npx netlify-cli deploy --prod --dir=dist --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
+      - name: Deploy site and Netlify Functions to production
+        run: npx netlify-cli deploy --prod --dir=dist --functions=netlify/functions --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN" --message "Deploy ${GITHUB_SHA::7}: database-backed Deal Desk agent"
