@@ -19,4 +19,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: bash scripts/direct_netlify_publish.sh
+      - name: Run direct publish
+        id: publish
+        continue-on-error: true
+        run: bash scripts/run_direct_publish_with_log.sh
+      - name: Upload direct publish diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-publish-diagnostics
+          path: /tmp/direct-publish.log
+          if-no-files-found: error
+      - name: Fail when direct publish fails
+        if: steps.publish.outcome != 'success'
+        run: exit 1
