@@ -9,18 +9,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.normalize import is_placeholder, norm_entity
 
 DB = os.environ.get("DATABASE_URL", "postgresql://skyline:skyline_dev@localhost/skyline")
+NYC_BOROUGHS = {"Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"}
 
 
 def _party_count(series):
     """Expected parties mirror migrate_csv's skip rules: placeholder names and
-    names that normalize to nothing never become deal_parties rows — counting
-    them made a CORRECT migration fail these assertions."""
+    names that normalize to nothing never become deal_parties rows."""
     return int(series.dropna().map(lambda x: not is_placeholder(str(x))
                                    and norm_entity(str(x)) is not None).sum())
 
 
 def main(csv_path):
-    df = pd.read_csv(csv_path, low_memory=False)
+    raw = pd.read_csv(csv_path, low_memory=False)
+    borough = raw["Borough"]
+    df = raw[borough.isna() | borough.isin(NYC_BOROUGHS)].copy()
+    dropped_non_nyc = len(raw) - len(df)
     conn = psycopg2.connect(DB); cur = conn.cursor()
     q = lambda sql: (cur.execute(sql), cur.fetchone()[0])[1]
 
@@ -30,6 +33,10 @@ def main(csv_path):
         checks.append(ok)
         print(f"{'PASS' if ok else 'FAIL'} - {name}: got {got}, want {want}")
 
+    print(f"INFO - explicit non-NYC source rows excluded: {dropped_non_nyc}")
+    check("invalid boroughs inserted", q(
+        "SELECT count(*) FROM properties WHERE borough IS NOT NULL AND borough NOT IN "
+        "('Manhattan','Brooklyn','Queens','Bronx','Staten Island')"), 0)
     check("deal count", q("SELECT count(*) FROM deals"), len(df))
     check("deals with a buyer party",
           q("SELECT count(DISTINCT deal_id) FROM deal_parties WHERE role='buyer'"),
@@ -45,11 +52,11 @@ def main(csv_path):
           int((df["Parse Status"] == "needs_review").sum()))
     check("banned asset types present", q(
         "SELECT count(*) FROM deals WHERE asset_type IN "
-        "('Condo','Commercial Condo','Co-op','Single Family','Two Family')"), 0)
+        "('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')"), 0)
     check("acris party rows without gate", q(
         "SELECT count(*) FROM deal_parties WHERE source_system='acris' AND amount_gate_passed IS NOT TRUE"), 0)
     got_excl = q("SELECT count(*) FROM exclusion_ledger")
-    ok_excl = got_excl >= 30  # ledger grows over time; the seed is the floor
+    ok_excl = got_excl >= 30
     checks.append(ok_excl)
     print(f"{'PASS' if ok_excl else 'FAIL'} - exclusion ledger seeded: got {got_excl}, want >= 30")
     check("duplicate contact rows", q(
@@ -62,7 +69,6 @@ def main(csv_path):
     check("equinox hotel deal present", q(
         "SELECT count(*) FROM deals d JOIN properties p USING (property_id) "
         "WHERE p.address_raw='35 Hudson Yards' AND d.sale_price=541000000"), 1)
-    # PPU/PPSF generated columns agree with CSV-derived values on a sample
     cur.execute("""SELECT count(*) FROM deals
                    WHERE units > 0 AND sale_price IS NOT NULL
                      AND abs(ppu - round(sale_price/units, 2)) > 0.01""")
