@@ -1,0 +1,3 @@
+Deploy the database-backed Deal Desk build to buyerdb production.
+This path intentionally matches both Netlify continuous deployment and the deploy-netlify-buyerdb GitHub workflow.
+Expected live test: asking for the best Brooklyn multifamily buyer around $3M must return Supabase api_buyers candidates, not netlify_ai_direct().
