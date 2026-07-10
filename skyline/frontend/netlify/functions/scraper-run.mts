@@ -12,7 +12,7 @@ async function dispatch(job: string, userId: string, options: Record<string, unk
   if (!requested?.run_id) throw new Error(requested?.error || `Unable to create ${job} run row.`);
   const site = getEnv("URL") || getEnv("FRONTEND_URL") || "https://buyerdb.netlify.app";
   const secret = triggerSecret();
-  if (!secret) throw new Error("SCRAPER_TRIGGER_SECRET is not configured.");
+  if (!secret) throw new Error("The scheduler credential is not configured.");
   const response = await fetch(`${site.replace(/\/$/, "")}/api/scrapers/run-background`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-scraper-trigger-secret": secret },
@@ -24,10 +24,10 @@ async function dispatch(job: string, userId: string, options: Record<string, unk
 
 export default async (req: Request, _context: Context) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  const expectedOrigin = (getEnv("URL") || getEnv("FRONTEND_URL") || "https://buyerdb.netlify.app").replace(/\/$/, "");
-  const origin = req.headers.get("origin");
-  const scheduledSecret = req.headers.get("x-scraper-trigger-secret");
-  if (scheduledSecret !== triggerSecret() && origin && origin !== expectedOrigin) return json({ error: "origin_not_allowed" }, 403);
+  const site = (getEnv("URL") || getEnv("FRONTEND_URL") || "https://buyerdb.netlify.app").replace(/\/$/, "");
+  const browserRequest = req.headers.get("origin") === site;
+  const scheduledRequest = Boolean(triggerSecret() && req.headers.get("x-scraper-trigger-secret") === triggerSecret());
+  if (!browserRequest && !scheduledRequest) return json({ error: "request_not_allowed" }, 403);
   let body: any = {};
   try { body = await req.json(); } catch { return json({ error: "invalid_json" }, 400); }
   const requestedJob = String(body.job || "full_refresh");
