@@ -22,7 +22,8 @@ def _party_count(series):
 
 def main(csv_path):
     raw = pd.read_csv(csv_path, low_memory=False)
-    df = raw[raw["Borough"].isin(NYC_BOROUGHS)].copy()
+    borough = raw["Borough"]
+    df = raw[borough.isna() | borough.isin(NYC_BOROUGHS)].copy()
     conn = psycopg2.connect(DB); cur = conn.cursor()
     q = lambda sql: (cur.execute(sql), cur.fetchone()[0])[1]
 
@@ -32,7 +33,7 @@ def main(csv_path):
         checks.append(ok)
         print(f"{'PASS' if ok else 'FAIL'} - {name}: got {got}, want {want}")
 
-    check("non-NYC rows excluded", len(raw) - len(df), 24)
+    check("explicit non-NYC rows excluded", len(raw) - len(df), 24)
     check("deal count", q("SELECT count(*) FROM deals"), len(df))
     check("deals with a buyer party",
           q("SELECT count(DISTINCT deal_id) FROM deal_parties WHERE role='buyer'"),
@@ -52,7 +53,7 @@ def main(csv_path):
     check("acris party rows without gate", q(
         "SELECT count(*) FROM deal_parties WHERE source_system='acris' AND amount_gate_passed IS NOT TRUE"), 0)
     got_excl = q("SELECT count(*) FROM exclusion_ledger")
-    ok_excl = got_excl >= 30  # ledger grows over time; the seed is the floor
+    ok_excl = got_excl >= 30
     checks.append(ok_excl)
     print(f"{'PASS' if ok_excl else 'FAIL'} - exclusion ledger seeded: got {got_excl}, want >= 30")
     check("duplicate contact rows", q(
@@ -65,7 +66,6 @@ def main(csv_path):
     check("equinox hotel deal present", q(
         "SELECT count(*) FROM deals d JOIN properties p USING (property_id) "
         "WHERE p.address_raw='35 Hudson Yards' AND d.sale_price=541000000"), 1)
-    # PPU/PPSF generated columns agree with CSV-derived values on a sample
     cur.execute("""SELECT count(*) FROM deals
                    WHERE units > 0 AND sale_price IS NOT NULL
                      AND abs(ppu - round(sale_price/units, 2)) > 0.01""")
