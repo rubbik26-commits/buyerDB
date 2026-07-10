@@ -1,3 +1,4 @@
+# deploy-marker: supabase-rpc-agent-2026-07-10-v2
 [build]
   base = "skyline/frontend"
   command = "npm install && npm run build"
