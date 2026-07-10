@@ -51,5 +51,6 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/027z_upload_resolution_helpers.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/028_upload_entity_resolution.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/029_upload_resolution_fixes.sql
-      - name: Prove exact, alias, fuzzy-review, contact and interaction behavior
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/030_upload_audit_history.sql
+      - name: Prove resolution, review, dedupe, interaction, and audit-history behavior
         run: python -m pytest backend/tests/test_upload_resolution_sql.py -q
