@@ -132,7 +132,8 @@ def main(csv_path, exclusions_path=None, reset=False):
     if not DB:
         raise SystemExit("DATABASE_URL is required")
     raw = pd.read_csv(csv_path, low_memory=False)
-    df = raw[raw["Borough"].isin(NYC_BOROUGHS)].copy()
+    borough = raw["Borough"]
+    df = raw[borough.isna() | borough.isin(NYC_BOROUGHS)].copy()
     dropped = len(raw) - len(df)
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
