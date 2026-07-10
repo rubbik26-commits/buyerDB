@@ -1,0 +1,64 @@
+name: diagnose-migration
+
+on:
+  pull_request:
+    branches: [ACRIS]
+    paths:
+      - ".github/workflows/diagnose-migration.yml"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: skyline
+          POSTGRES_PASSWORD: skyline_dev
+          POSTGRES_DB: skyline
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://skyline:skyline_dev@localhost:5432/skyline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        working-directory: skyline
+        run: pip install -q -r requirements.txt
+      - name: Run migration and capture diagnostics
+        id: migration
+        continue-on-error: true
+        working-directory: skyline
+        run: |
+          set -o pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/001_schema.sql > /tmp/schema.log 2>&1
+          python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv > /tmp/migrate.log 2>&1
+          python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv > /tmp/assert.log 2>&1
+      - name: Publish exact diagnostic to PR
+        if: steps.migration.outcome != 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const paths = ['/tmp/schema.log','/tmp/migrate.log','/tmp/assert.log'];
+            let body = '## Migration diagnostic\n';
+            for (const path of paths) {
+              if (!fs.existsSync(path)) continue;
+              const lines = fs.readFileSync(path, 'utf8').split('\n').slice(-120).join('\n');
+              body += `\n### ${path}\n\n\`\`\`text\n${lines.slice(-12000)}\n\`\`\`\n`;
+            }
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body});
+      - name: Fail after diagnostics
+        if: steps.migration.outcome != 'success'
+        run: exit 1
