@@ -1,0 +1,64 @@
+name: deploy-netlify-buyerdb
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ACRIS]
+    paths:
+      - "netlify.toml"
+      - "skyline/frontend/**"
+      - ".github/workflows/deploy-netlify-buyerdb.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netlify-buyerdb-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: skyline/frontend
+    env:
+      NETLIFY_SITE_ID: e1780534-ba0b-470e-b98f-85b29f7d32a1
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      VITE_API_URL: https://pdvyuepsdnpxctmagdcq.supabase.co
+      VITE_USE_SUPABASE_RPC: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: skyline/frontend/package-lock.json
+      - name: Require deployment credential
+        run: test -n "$NETLIFY_AUTH_TOKEN"
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+      - name: Deploy production
+        run: |
+          npx --yes netlify-cli@latest deploy --prod --json --dir=dist --functions=netlify/functions --site "$NETLIFY_SITE_ID" > /tmp/deploy.json
+          cat /tmp/deploy.json
+          DEPLOY_URL=$(jq -r '.deploy_url // .url // .ssl_url // empty' /tmp/deploy.json)
+          test -n "$DEPLOY_URL"
+          echo "DEPLOY_URL=$DEPLOY_URL" >> "$GITHUB_ENV"
+      - name: Verify database-backed agent
+        working-directory: .
+        run: |
+          payload='{"question":"Who is the best buyer for a Brooklyn multifamily around $3M?"}'
+          for i in $(seq 1 20); do
+            curl -fsS -X POST "$DEPLOY_URL/api/agent" -H 'Content-Type: application/json' -d "$payload" > /tmp/agent.json || true
+            if jq -e '.tool == "find_similar_buyers" and (.result.candidates | length) > 0' /tmp/agent.json >/dev/null 2>&1; then
+              cat /tmp/agent.json
+              exit 0
+            fi
+            sleep 3
+          done
+          cat /tmp/agent.json || true
+          exit 1
