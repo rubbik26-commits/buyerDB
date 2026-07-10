@@ -1,5 +1,7 @@
-name: sbi-acris-refresh
+name: sbi-acris-refresh-manual-fallback
 
+# Manual emergency fallback only. Production ACRIS scheduling is handled by the
+# live Supabase function/cron path, not GitHub Actions.
 on:
   workflow_dispatch:
     inputs:
@@ -11,11 +13,9 @@ on:
         description: "Recorded-date lookback window"
         required: false
         default: "120"
-  schedule:
-    - cron: "12 6 * * *"
 
 concurrency:
-  group: sbi-acris-refresh
+  group: sbi-acris-refresh-manual
   cancel-in-progress: false
 
 permissions:
@@ -42,17 +42,14 @@ jobs:
         id: request
         run: |
           set -euo pipefail
-          body=$(jq -n --arg job "acris_refresh" --arg user_id "github-actions" --argjson limit "$LIMIT" --argjson days "$DAYS" '{job:$job,user_id:$user_id,options:{limit:$limit,days:$days}}')
+          body=$(jq -n --arg job "acris_refresh" --arg user_id "github-actions-manual" --argjson limit "$LIMIT" --argjson days "$DAYS" '{job:$job,user_id:$user_id,options:{limit:$limit,days:$days}}')
           curl -fsS -X POST "$SUPABASE_URL/rest/v1/rpc/api_request_scrape" \
             -H 'Content-Type: application/json' \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -d "$body" | tee /tmp/request.json
           run_id=$(jq -r '.run_id' /tmp/request.json)
-          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            echo "::error::api_request_scrape did not return run_id"
-            exit 1
-          fi
+          test -n "$run_id" && test "$run_id" != "null"
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
       - name: Invoke live Supabase ACRIS scraper function
@@ -64,8 +61,3 @@ jobs:
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -d "$body" | tee /tmp/acris-refresh.json
           jq -e '.ok == true or .status == "completed_with_errors"' /tmp/acris-refresh.json >/dev/null
-
-      - name: Show scraper summary
-        if: always()
-        run: |
-          test -f /tmp/acris-refresh.json && cat /tmp/acris-refresh.json || true
