@@ -34,7 +34,8 @@ export default function Review({ refreshMeta }) {
     setActing(item.review_id);
     setErr(null);
     try {
-      await api.reviewAct({ review_id: item.review_id, action, entity_id, user_id: "broker" });
+      const result = await api.reviewAct({ review_id: item.review_id, action, entity_id, user_id: "broker" });
+      if (result?.error) throw new Error(result.error);
       await load();
       refreshMeta && await refreshMeta();
     } catch (e) {
@@ -52,7 +53,7 @@ export default function Review({ refreshMeta }) {
       <div className="view-head">
         <div className="eyebrow">Nothing merges without a human</div>
         <h1>Review queue</h1>
-        <p>Flags the pipeline raised and won’t resolve on its own: fuzzy owner matches from your uploads, square-foot and geography conflicts, and legacy low-confidence parses. Confirm, reject, or dismiss each.</p>
+        <p>Ambiguous upload matches, property conflicts, and low-confidence parses stop here. A fuzzy owner is never linked until you select the entity, create a new one, or reject the row.</p>
       </div>
 
       <div className="filters">
@@ -69,43 +70,55 @@ export default function Review({ refreshMeta }) {
 
       <ErrorBanner error={err} />
       {loading && !data ? <Loading label="Loading queue..." /> : null}
-
       {data && items.length === 0 ? <Empty title="Queue is clear." hint="No open items match this filter." /> : null}
 
-      {data && items.map((it) => (
-        <div className="review-item" key={it.review_id}>
-          <div className="h">
-            <div>
-              <span className="cls">{it.issue_class}</span>
-              <span style={{ color: "var(--tx-mute)", fontFamily: "var(--mono)", fontSize: 11, marginLeft: 10 }}>{it.object_type}</span>
+      {data && items.map((it) => {
+        const entityMerge = it.issue_class === "entity_merge" && it.payload;
+        return (
+          <div className="review-item" key={it.review_id}>
+            <div className="h">
+              <div>
+                <span className="cls">{it.issue_class}</span>
+                <span style={{ color: "var(--tx-mute)", fontFamily: "var(--mono)", fontSize: 11, marginLeft: 10 }}>{it.object_type}</span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {!entityMerge && <button className="btn ghost sm" disabled={acting === it.review_id} onClick={() => act(it, "resolve")}>Resolve</button>}
+                <button className="btn ghost sm" disabled={acting === it.review_id} onClick={() => act(it, "dismiss")}>{entityMerge ? "Reject row" : "Dismiss"}</button>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn ghost sm" disabled={acting === it.review_id} onClick={() => act(it, "resolve")}>Resolve</button>
-              <button className="btn ghost sm" disabled={acting === it.review_id} onClick={() => act(it, "dismiss")}>Dismiss</button>
-            </div>
-          </div>
 
-          {it.issue_class === "entity_merge" && it.payload ? (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 13 }}>Uploaded owner <strong>{it.payload.name}</strong> resembles existing entities — confirm the match to link the contact:</div>
-              {(it.payload.candidates || []).map((c) => (
-                <div className="cand" key={c.entity_id}>
-                  <div>
-                    <div className="nm">{c.display_name}</div>
-                    <div className="sc">{c.reason} · score {c.score}</div>
-                  </div>
-                  <button className="btn brass sm" disabled={acting === it.review_id} onClick={() => act(it, "confirm_merge", c.entity_id)}>This is the match</button>
+            {entityMerge ? (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 13 }}>
+                  Uploaded entity <strong>{it.payload.name}</strong> resembles existing records. Select a verified match or create a new entity.
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ marginTop: 8, fontSize: 13, color: "var(--tx-dim)" }}>
-              {it.payload?.address && <div><strong style={{ color: "var(--tx)" }}>{it.payload.address}</strong></div>}
-              {it.payload?.notes && <div style={{ fontStyle: "italic", marginTop: 4 }}>{String(it.payload.notes).slice(0, 240)}</div>}
-            </div>
-          )}
-        </div>
-      ))}
+                {(it.payload.property_address || it.payload.borough || it.payload.asset_type) && (
+                  <div className="sc" style={{ marginTop: 6 }}>
+                    {[it.payload.property_address, it.payload.borough, it.payload.asset_type].filter(Boolean).join(" · ")}
+                  </div>
+                )}
+                {(it.payload.candidates || []).map((c) => (
+                  <div className="cand" key={c.entity_id}>
+                    <div>
+                      <div className="nm">{c.display_name}</div>
+                      <div className="sc">{c.reason} · score {c.score}</div>
+                    </div>
+                    <button className="btn brass sm" disabled={acting === it.review_id} onClick={() => act(it, "confirm_merge", c.entity_id)}>This is the match</button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                  <button className="btn ghost sm" disabled={acting === it.review_id} onClick={() => act(it, "create_new")}>No match — create new entity</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: 8, fontSize: 13, color: "var(--tx-dim)" }}>
+                {it.payload?.address && <div><strong style={{ color: "var(--tx)" }}>{it.payload.address}</strong></div>}
+                {it.payload?.notes && <div style={{ fontStyle: "italic", marginTop: 4 }}>{String(it.payload.notes).slice(0, 240)}</div>}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
