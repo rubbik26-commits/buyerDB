@@ -9,6 +9,14 @@ on:
       - "skyline/frontend/**"
       - "skyline/database/migrations/**"
       - ".github/workflows/deploy-netlify-buyerdb.yml"
+  pull_request:
+    branches: [ACRIS]
+    types: [opened, synchronize, reopened]
+    paths:
+      - "netlify.toml"
+      - "skyline/frontend/**"
+      - "skyline/database/migrations/**"
+      - ".github/workflows/deploy-netlify-buyerdb.yml"
 
 permissions:
   contents: read
@@ -19,6 +27,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     defaults:
       run:
