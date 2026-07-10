@@ -1,12 +1,12 @@
-# deploy-marker: supabase-rpc-agent-2026-07-10-v4
 [build]
   base = "skyline/frontend"
-  command = "npm install && npm run build"
+  command = "npm ci && npm run build"
   publish = "dist"
 
 [build.environment]
   VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
   VITE_USE_SUPABASE_RPC = "true"
+  NODE_VERSION = "20"
 
 [context.production.environment]
   VITE_API_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co"
@@ -14,6 +14,7 @@
 
 [functions]
   directory = "netlify/functions"
+  node_bundler = "esbuild"
 
 [[redirects]]
   from = "/*"
@@ -26,3 +27,5 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co https://api.groq.com https://generativelanguage.googleapis.com https://openrouter.ai https://api.cloudflare.com https://api.anthropic.com https://api.openai.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
