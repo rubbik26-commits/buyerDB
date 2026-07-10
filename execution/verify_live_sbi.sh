@@ -42,7 +42,9 @@ from (values
   ('public.api_delete_view(uuid,text)'),
   ('public.api_import_canonical_contacts(int,int)'),
   ('public.api_dedupe_canonical_contacts()'),
-  ('public.api_rank_primary_contacts()')
+  ('public.api_rank_primary_contacts()'),
+  ('public.api_seed_canonical_csv_rows(jsonb)'),
+  ('public.api_seed_from_github_csv(int,int)')
 ) x(fn);
 
 \echo '== hard invariants =='
@@ -65,6 +67,16 @@ with checks as (
   select 'banned_asset_types', count(*)
   from public.sbi_deals
   where asset_type in ('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')
+  union all
+  select 'factless_canonical_seed_rows', count(*)
+  from public.sbi_deals d
+  where d.provenance->>'loader'='api_seed_canonical_csv_rows'
+    and d.shortcode is null
+    and d.source_url is null
+    and d.sale_date is null
+    and d.sale_price is null
+    and d.asset_type is null
+    and not exists(select 1 from public.sbi_deal_parties dp where dp.deal_id=d.deal_id)
   union all
   select 'running_source_runs_over_1h', count(*)
   from public.sbi_source_runs
@@ -111,6 +123,15 @@ with checks as (
   ) f(signature)
   where has_function_privilege('anon',signature,'EXECUTE')
      or has_function_privilege('authenticated',signature,'EXECUTE')
+  union all
+  select 'public_canonical_seed_rpc_grants', count(*)
+  from (values
+    ('public.api_seed_canonical_csv_rows(jsonb)'),
+    ('public.api_seed_canonical_csv_rows_unfiltered(jsonb)'),
+    ('public.api_seed_from_github_csv(integer,integer)')
+  ) f(signature)
+  where has_function_privilege('anon',signature,'EXECUTE')
+     or has_function_privilege('authenticated',signature,'EXECUTE')
 )
 select * from checks order by check_name;
 
@@ -130,6 +151,12 @@ begin
     union all
     select 1 from public.sbi_deals
       where asset_type in ('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')
+    union all
+    select 1 from public.sbi_deals d
+      where d.provenance->>'loader'='api_seed_canonical_csv_rows'
+        and d.shortcode is null and d.source_url is null and d.sale_date is null
+        and d.sale_price is null and d.asset_type is null
+        and not exists(select 1 from public.sbi_deal_parties dp where dp.deal_id=d.deal_id)
     union all
     select 1 from public.sbi_contacts c left join public.sbi_entities e using(entity_id)
       where e.entity_id is null
@@ -158,6 +185,16 @@ begin
      or has_function_privilege('authenticated','public.api_rank_primary_contacts()','EXECUTE')
   then
     raise exception 'canonical contact maintenance RPCs are publicly executable';
+  end if;
+
+  if has_function_privilege('anon','public.api_seed_canonical_csv_rows(jsonb)','EXECUTE')
+     or has_function_privilege('authenticated','public.api_seed_canonical_csv_rows(jsonb)','EXECUTE')
+     or has_function_privilege('anon','public.api_seed_canonical_csv_rows_unfiltered(jsonb)','EXECUTE')
+     or has_function_privilege('authenticated','public.api_seed_canonical_csv_rows_unfiltered(jsonb)','EXECUTE')
+     or has_function_privilege('anon','public.api_seed_from_github_csv(integer,integer)','EXECUTE')
+     or has_function_privilege('authenticated','public.api_seed_from_github_csv(integer,integer)','EXECUTE')
+  then
+    raise exception 'canonical seed RPCs are publicly executable';
   end if;
 end;
 $$;
