@@ -16,6 +16,12 @@ export VITE_USE_SUPABASE_RPC=$(jq -r '.vite_rpc_mode // empty' <<<"$RESPONSE")
 test -n "$PROXY_URL"
 test -n "$VITE_API_URL"
 test -n "$VITE_SUPABASE_ANON_KEY"
+
+SITE_ID="e1780534-ba0b-470e-b98f-85b29f7d32a1"
+NOAUTH_STATUS=$(curl -sS -o /tmp/netlify-site-noauth.json -w '%{http_code}' "$PROXY_URL/api/v1/sites/$SITE_ID")
+DUMMY_STATUS=$(curl -sS -o /tmp/netlify-site-dummy.json -w '%{http_code}' -H 'Authorization: Bearer oidc-proxy' "$PROXY_URL/api/v1/sites/$SITE_ID")
+echo "NETLIFY_PROXY_STATUS noauth=$NOAUTH_STATUS dummy=$DUMMY_STATUS"
+
 export NETLIFY_API_URL="${PROXY_URL}/api/v1"
 export NETLIFY_DEPLOY_SOURCE="cli"
 
@@ -32,7 +38,7 @@ npx --yes netlify-cli@26.2.0 deploy \
   --json \
   --dir=dist \
   --functions=netlify/functions \
-  --site=e1780534-ba0b-470e-b98f-85b29f7d32a1 \
+  --site="$SITE_ID" \
   --auth=oidc-proxy \
   --message="verified direct production deploy" | tee /tmp/netlify-direct-deploy.json
 
