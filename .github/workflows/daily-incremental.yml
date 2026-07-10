@@ -1,19 +1,16 @@
-name: daily-incremental
+name: daily-incremental-manual-fallback
 
-# Primary scraper train from the blueprint:
-# traded discovery/fetch -> ACRIS fresh window -> Rolling Sales, all through the
-# proven Python modules and Postgres store layer. Netlify remains frontend only.
+# Manual emergency fallback only. Production scraper scheduling must not consume
+# GitHub Actions minutes. The canonical production schedule runs outside GitHub.
 on:
-  schedule:
-    - cron: "17 13 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: skyline-incremental
+  group: skyline-incremental-manual
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
@@ -34,7 +31,7 @@ jobs:
       - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add the Supabase session-pooler connection string as a repository secret."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set."
             exit 1
           fi
 
@@ -42,54 +39,34 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install worker deps
+      - name: Install worker dependencies
         run: pip install -r requirements.txt
 
-      - name: Run traded incremental ingest
+      - name: Run proven Traded incremental ingest
         run: python -m worker.run_incremental
 
-      - name: Run ACRIS fresh window ingest
+      - name: Run proven ACRIS fresh-window ingest
         run: python -m worker.phase3_fresh
 
-      - name: Run Rolling Sales sqft/units enrichment
+      - name: Run Rolling Sales enrichment
         run: python -m worker.rolling_sales --batch 400
 
-      - name: Verify live invariants after refresh
+      - name: Verify production invariants
         working-directory: ..
         run: |
           python - <<'PY'
           import os, psycopg
-          conn = psycopg.connect(os.environ['DATABASE_URL'])
+          conn = psycopg.connect(os.environ["DATABASE_URL"])
           checks = {
-            'duplicate_property_price_date': "select count(*) from (select property_id,sale_price,sale_date,count(*) from sbi_deals group by property_id,sale_price,sale_date having count(*)>1) x",
-            'acris_parties_without_gate': "select count(*) from sbi_deal_parties dp join sbi_deals d using(deal_id) where dp.source_system='acris' and dp.role in ('buyer','seller') and coalesce(dp.amount_gate_passed,false) is not true",
-            'banned_asset_rows': "select count(*) from sbi_deals where asset_type in ('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')"
+              "duplicate_property_price_date": "select count(*) from (select property_id,sale_price,sale_date,count(*) from sbi_deals group by property_id,sale_price,sale_date having count(*)>1) x",
+              "acris_parties_without_gate": "select count(*) from sbi_deal_parties dp join sbi_deals d using(deal_id) where dp.source_system='acris' and dp.role in ('buyer','seller') and coalesce(dp.amount_gate_passed,false) is not true",
+              "banned_asset_rows": "select count(*) from sbi_deals where asset_type in ('Condo','Commercial Condo','Co-op','Single Family','Two Family','1-2 Family')",
           }
           with conn, conn.cursor() as cur:
-            for name, sql in checks.items():
-              cur.execute(sql)
-              n = cur.fetchone()[0]
-              print(name, n)
-              if n:
-                raise SystemExit(f'{name} failed: {n}')
+              for name, sql in checks.items():
+                  cur.execute(sql)
+                  failures = cur.fetchone()[0]
+                  print(name, failures)
+                  if failures:
+                      raise SystemExit(f"{name} failed: {failures}")
           PY
-
-      - name: Keep-alive commit
-        run: |
-          git config user.name "skyline-bot"
-          git config user.email "bot@skyline.local"
-          date -u +"%Y-%m-%dT%H:%M:%SZ" > .last_incremental_run
-          git add .last_incremental_run
-          if git diff --staged --quiet; then
-            echo "keep-alive: nothing to commit"
-          else
-            git commit -m "chore: keep-alive $(date -u +%F)"
-            git push
-          fi
-
-      - name: Alert on failure
-        if: failure()
-        run: |
-          if [ -n "$ALERT_WEBHOOK_URL" ]; then
-            curl -s -X POST "$ALERT_WEBHOOK_URL" -H 'Content-Type: application/json' -d "{\"text\":\"Skyline daily-incremental FAILED: run ${{ github.run_id }}\"}" || true
-          fi
