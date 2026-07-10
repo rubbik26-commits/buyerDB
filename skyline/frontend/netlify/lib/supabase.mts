@@ -1,9 +1,11 @@
+import { effectiveSupabasePublishableKey, effectiveSupabaseUrl, netlifyEnv } from "./public-config.mts";
+
 export type Json = Record<string, any>;
-const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
+const env = netlifyEnv;
 
 export function config() {
-  const url = (env("SUPABASE_URL") || env("VITE_API_URL")).replace(/\/$/, "");
-  const key = env("SUPABASE_PUBLISHABLE_KEY") || env("SUPABASE_ANON_KEY") || env("VITE_SUPABASE_ANON_KEY");
+  const url = effectiveSupabaseUrl();
+  const key = effectiveSupabasePublishableKey();
   const runtimeSecret = env("SCRAPER_TRIGGER_SECRET") || env("SYNC_SECRET") || env("CRON_SECRET") || env("SUPABASE_JWT_SECRET");
   if (!url || !key) throw new Error("The Supabase URL/public key is not configured for the Netlify runtime.");
   return { url, key, runtimeSecret };

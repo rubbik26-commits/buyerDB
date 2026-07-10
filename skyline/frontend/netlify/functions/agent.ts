@@ -1,11 +1,12 @@
 import type { Config, Context } from "@netlify/functions";
+import { effectiveSupabasePublishableKey, effectiveSupabaseUrl, netlifyEnv } from "../lib/public-config.mts";
 
 type Message = { role: "system" | "user" | "assistant"; content: string };
 type Plan = { tool: string; arguments: Record<string, unknown>; why: string };
 type ProviderResult = { provider: string; model: string; text: string; latency_ms: number; input_tokens?: number; output_tokens?: number };
 
 const BUILD = "blueprint-sql-agent-2026-07-10";
-const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
+const env = netlifyEnv;
 const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
 
 const TOOL_CATALOG = `
@@ -84,8 +85,8 @@ export default async (req: Request, _context: Context) => {
 
 export const config: Config = { path: "/api/agent" };
 
-function supabaseUrl() { return (env("SUPABASE_URL") || env("VITE_API_URL")).replace(/\/$/, ""); }
-function publicKey() { return env("SUPABASE_ANON_KEY") || env("SUPABASE_PUBLISHABLE_KEY") || env("VITE_SUPABASE_ANON_KEY"); }
+function supabaseUrl() { return effectiveSupabaseUrl(); }
+function publicKey() { return effectiveSupabasePublishableKey(); }
 function serviceKey() { return env("SUPABASE_SERVICE_ROLE_KEY") || env("SUPABASE_SERVICE_KEY"); }
 
 async function rpc(fn: string, args: Record<string, unknown>, write = false) {
