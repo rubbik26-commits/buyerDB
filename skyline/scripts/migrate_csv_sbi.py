@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.normalize import normalize_address, split_address, norm_entity, is_placeholder, spv_suspect, entity_type
 
 DB = os.environ.get("DATABASE_URL")
+NYC_BOROUGHS = {"Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"}
 ACRIS_DOC_RE = re.compile(r"doc_id=([A-Z0-9]+)")
 PARTIES_ACRIS_RE = re.compile(r"parties from ACRIS (\w+) \(amount(?:-gated)?\)")
 
@@ -130,7 +131,9 @@ def get_entity_id(cur, display_name, all_addr_norms):
 def main(csv_path, exclusions_path=None, reset=False):
     if not DB:
         raise SystemExit("DATABASE_URL is required")
-    df = pd.read_csv(csv_path, low_memory=False)
+    raw = pd.read_csv(csv_path, low_memory=False)
+    df = raw[raw["Borough"].isin(NYC_BOROUGHS)].copy()
+    dropped = len(raw) - len(df)
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
     if reset:
@@ -240,7 +243,7 @@ def main(csv_path, exclusions_path=None, reset=False):
             n_review += 1
 
     conn.commit()
-    print(json.dumps({"deals": n_deals, "properties": len(prop_ids), "entities": len(ent_ids), "parties": n_parties, "contacts": n_contacts, "review": n_review}, default=str))
+    print(json.dumps({"deals": n_deals, "properties": len(prop_ids), "entities": len(ent_ids), "parties": n_parties, "contacts": n_contacts, "review": n_review, "dropped_non_nyc": dropped}, default=str))
     conn.close()
 
 
