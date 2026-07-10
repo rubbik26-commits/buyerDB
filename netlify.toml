@@ -1,4 +1,4 @@
-# deploy-marker: supabase-rpc-agent-2026-07-10-v3
+# deploy-marker: supabase-rpc-agent-2026-07-10-v4
 [build]
   base = "skyline/frontend"
   command = "npm install && npm run build"
@@ -26,4 +26,3 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://*.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'
