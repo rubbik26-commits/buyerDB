@@ -1,14 +1,12 @@
-name: weekly-enrichment
+name: weekly-enrichment-manual-fallback
 
-# Weekly ACRIS lag closer from the blueprint. It runs the proven Python phase2
-# matching/enrichment path and writes parties only through the amount gate.
+# Manual emergency fallback only. Production enrichment scheduling must not use
+# GitHub Actions minutes.
 on:
-  schedule:
-    - cron: "43 11 * * 0"
   workflow_dispatch:
 
 concurrency:
-  group: skyline-enrichment
+  group: skyline-enrichment-manual
   cancel-in-progress: false
 
 permissions:
@@ -25,14 +23,13 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
       SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
-      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Require database connection secret
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set. Add the Supabase session-pooler connection string as a repository secret."
+            echo "::error::Neither SUPABASE_DB_URL nor DATABASE_URL is set."
             exit 1
           fi
 
@@ -40,29 +37,22 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install worker deps
+      - name: Install worker dependencies
         run: pip install -r requirements.txt
 
-      - name: Phase 2 enrichment - match missing parties through amount gate
+      - name: Run proven amount-gated phase 2 enrichment
         run: python -m worker.phase2_stages
 
-      - name: Verify amount gate after enrichment
+      - name: Verify amount gate
         working-directory: ..
         run: |
           python - <<'PY'
           import os, psycopg
-          conn = psycopg.connect(os.environ['DATABASE_URL'])
+          conn = psycopg.connect(os.environ["DATABASE_URL"])
           with conn, conn.cursor() as cur:
-            cur.execute("select count(*) from sbi_deal_parties dp join sbi_deals d using(deal_id) where dp.source_system='acris' and dp.role in ('buyer','seller') and coalesce(dp.amount_gate_passed,false) is not true")
-            n = cur.fetchone()[0]
-            print('acris_parties_without_gate', n)
-            if n:
-              raise SystemExit(f'amount gate failed: {n}')
+              cur.execute("select count(*) from sbi_deal_parties dp join sbi_deals d using(deal_id) where dp.source_system='acris' and dp.role in ('buyer','seller') and coalesce(dp.amount_gate_passed,false) is not true")
+              failures = cur.fetchone()[0]
+              print("acris_parties_without_gate", failures)
+              if failures:
+                  raise SystemExit(f"amount gate failed: {failures}")
           PY
-
-      - name: Alert on failure
-        if: failure()
-        run: |
-          if [ -n "$ALERT_WEBHOOK_URL" ]; then
-            curl -s -X POST "$ALERT_WEBHOOK_URL" -H 'Content-Type: application/json' -d "{\"text\":\"Skyline weekly-enrichment FAILED: run ${{ github.run_id }}\"}" || true
-          fi
