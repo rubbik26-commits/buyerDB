@@ -1,14 +1,21 @@
 import type { Config, Context } from "@netlify/functions";
+import {
+  effectiveSupabasePublishableKey,
+  effectiveSupabaseUrl,
+  netlifyEnv,
+  publicSupabaseConfigSource,
+} from "../lib/public-config.mts";
 
-const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
+const env = netlifyEnv;
 const present = (...names: string[]) => names.some(name => Boolean(env(name)));
 
 export default async (_req: Request, _context: Context) => new Response(JSON.stringify({
   runtime: "netlify-supabase-blueprint",
   database: {
-    url: present("SUPABASE_URL", "VITE_API_URL"),
-    public_key: present("SUPABASE_ANON_KEY", "SUPABASE_PUBLISHABLE_KEY", "VITE_SUPABASE_ANON_KEY"),
+    url: Boolean(effectiveSupabaseUrl()),
+    public_key: Boolean(effectiveSupabasePublishableKey()),
     server_key: present("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY"),
+    source: publicSupabaseConfigSource(),
   },
   scraper: {
     scheduler_credential: present("SCRAPER_TRIGGER_SECRET", "SYNC_SECRET", "CRON_SECRET"),
