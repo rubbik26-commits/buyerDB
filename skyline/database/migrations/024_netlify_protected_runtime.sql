@@ -133,6 +133,25 @@ begin
 end;
 $$;
 
+create or replace function public.sbi_runtime_log_ai(
+  p_secret text,
+  p_user_id text,
+  p_provider text,
+  p_model text,
+  p_purpose text,
+  p_latency_ms int,
+  p_input_tokens int,
+  p_output_tokens int,
+  p_fallback_from text,
+  p_status text
+) returns uuid
+language plpgsql volatile security definer set search_path=public as $$
+begin
+  if not public.sbi_runtime_secret_ok(p_secret) then raise exception 'runtime authorization failed'; end if;
+  return public.sbi_log_ai(p_user_id,p_provider,p_model,p_purpose,p_latency_ms,p_input_tokens,p_output_tokens,p_fallback_from,p_status);
+end;
+$$;
+
 revoke all on function
   public.sbi_runtime_request_run(text,text,text,jsonb),
   public.sbi_runtime_active_run(text,text,int),
@@ -142,7 +161,8 @@ revoke all on function
   public.sbi_runtime_phase2_targets(text,int),
   public.sbi_runtime_phase2_apply(text,uuid,text,numeric,date,text,text,text,text),
   public.sbi_runtime_sync(text,jsonb),
-  public.sbi_runtime_broker_contacts(text,jsonb)
+  public.sbi_runtime_broker_contacts(text,jsonb),
+  public.sbi_runtime_log_ai(text,text,text,text,text,int,int,int,text,text)
 from public;
 
 grant execute on function
@@ -154,7 +174,8 @@ grant execute on function
   public.sbi_runtime_phase2_targets(text,int),
   public.sbi_runtime_phase2_apply(text,uuid,text,numeric,date,text,text,text,text),
   public.sbi_runtime_sync(text,jsonb),
-  public.sbi_runtime_broker_contacts(text,jsonb)
+  public.sbi_runtime_broker_contacts(text,jsonb),
+  public.sbi_runtime_log_ai(text,text,text,text,text,int,int,int,text,text)
 to anon,authenticated;
 
 revoke execute on function public.api_request_scrape(text,text,jsonb) from anon;
