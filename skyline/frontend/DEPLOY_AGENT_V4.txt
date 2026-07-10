@@ -1,0 +1,2 @@
+Deploy the database-backed Deal Desk agent build supabase-rpc-agent-2026-07-10-v3 to buyerdb production.
+Synchronization 2: run the CI production deployment job from the current ACRIS workflow.
