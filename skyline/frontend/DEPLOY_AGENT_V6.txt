@@ -1,0 +1,2 @@
+Final production deployment trigger for the database-backed Deal Desk.
+The deployed agent must query Supabase before responding and return live buyer candidates.
