@@ -7,6 +7,12 @@ on:
       - "netlify.toml"
       - "skyline/frontend/**"
       - ".github/workflows/package-netlify-source.yml"
+  pull_request:
+    branches: [ACRIS]
+    paths:
+      - "netlify.toml"
+      - "skyline/frontend/**"
+      - ".github/workflows/package-netlify-source.yml"
   workflow_dispatch:
 
 permissions:
