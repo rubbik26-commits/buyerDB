@@ -1,45 +1,110 @@
 import type { Config, Context } from "@netlify/functions";
 
-type Message = { role: "system" | "user" | "assistant"; content: string };
-type ProviderResult = { text: string; provider: string; model: string };
 const env = (name: string) => (globalThis as any).Netlify?.env?.get?.(name) || "";
-
-const SYSTEM = `You are Skyline Buyer Intelligence OS, a NYC commercial real estate deal-intelligence assistant.
-
-Rules:
-- Be concise and broker-useful.
-- Do not invent phone numbers, emails, owners, buyers, prices, or deal facts.
-- If the question asks for contact info and none is provided in the prompt/context, say the system needs the contacts table/backend to answer.
-- If the question asks for buyer recommendations without database rows, say a backend database query is required.
-- Explain limitations plainly.`;
 
 export default async (req: Request, _context: Context) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
   let body: any = {};
   try { body = await req.json(); } catch { return json({ error: "invalid_json" }, 400); }
+
   const question = String(body.question || "").trim();
-  const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
   if (!question) return json({ error: "missing_question" }, 400);
 
-  const messages: Message[] = [
-    { role: "system", content: SYSTEM },
-    ...history.filter((m: any) => m && (m.role === "user" || m.role === "assistant") && m.content).map((m: any) => ({ role: m.role, content: String(m.content) })),
-    { role: "user", content: question },
-  ];
+  try {
+    const q = question.toLowerCase();
 
-  const errors: string[] = [];
-  for (const provider of providerOrder()) {
-    try {
-      const result = await complete(provider, messages);
-      return json({ answer: result.text, providers: { synthesis: result.provider }, tool: "netlify_ai_direct", arguments: {}, result: { note: "Netlify Function AI fallback. Database-backed tools require the FastAPI backend or Supabase RPC tool layer." } });
-    } catch (err: any) { errors.push(`${provider}: ${err?.message || String(err)}`.slice(0, 240)); }
+    if (q.includes("buyer")) {
+      const args = {
+        borough: boroughFrom(question),
+        asset_type: assetFrom(question),
+        price_min: priceFrom(question) ? Math.round(priceFrom(question)! * 0.5) : null,
+        price_max: priceFrom(question) ? Math.round(priceFrom(question)! * 1.5) : null,
+        min_deals: 1,
+        lim: 10,
+      };
+      const result = await rpc("api_buyers", args);
+      const buyers = Array.isArray(result?.buyers) ? result.buyers : [];
+      const answer = buyers.length
+        ? buyers.slice(0, 10).map((b: any, i: number) => `${i + 1}. ${b.name} — ${Number(b.n || 0).toLocaleString()} deals, ${money(b.vol)} total volume${b.has_contact ? ", contact on file" : ", no contact on file"}`).join("\n")
+        : "No matching buyers were returned by the live database for those criteria.";
+      return json({ tool: "api_buyers", arguments: args, result: { candidates: buyers }, answer, providers: { plan: "deterministic", synthesis: "deterministic" } });
+    }
+
+    if (q.includes("phone") || q.includes("email") || q.includes("contact")) {
+      const term = question.replace(/what'?s|what is|phone number|email|contact|for|owner|buyer|seller|who is/gi, " ").replace(/\s+/g, " ").trim();
+      const result = await rpc("api_contact_search", { q: term, lim: 10 });
+      const matches = Array.isArray(result?.matches) ? result.matches : [];
+      const lines = matches.flatMap((m: any) => (m.contacts || []).map((c: any) => `${m.name}: ${c.phone || "no phone"} / ${c.email || "no email"}`));
+      return json({ tool: "api_contact_search", arguments: { q: term, lim: 10 }, result, answer: lines.length ? lines.join("\n") : `No phone or email is on file for ${term || "that entity"}.`, providers: { plan: "deterministic", synthesis: "deterministic" } });
+    }
+
+    const result = await rpc("api_recent_deals", { q: question, lim: 10 });
+    const deals = Array.isArray(result?.deals) ? result.deals : [];
+    const answer = deals.length
+      ? deals.map((d: any, i: number) => `${i + 1}. ${d.address || "Unknown address"} — ${d.asset_type || "asset"} — ${money(d.sale_price)} — buyer: ${d.buyer || "unknown"}`).join("\n")
+      : "No matching deal rows were returned by the live database.";
+    return json({ tool: "api_recent_deals", arguments: { q: question, lim: 10 }, result, answer, providers: { plan: "deterministic", synthesis: "deterministic" } });
+  } catch (err: any) {
+    return json({ error: "agent_database_query_failed", detail: err?.message || String(err) }, 500);
   }
-  return json({ error: "no_ai_provider_available", detail: errors.join("; ") || "No provider keys configured for Netlify Functions.", hint: "Set at least one AI provider key in Netlify environment variables." }, 503);
 };
 
 export const config: Config = { path: "/api/agent" };
-function providerOrder(): string[] { const order = env("AI_PROVIDER_ORDER") || "groq,gemini,openrouter,cloudflare,anthropic,openai"; return order.split(",").map((s) => s.trim()).filter(Boolean); }
-async function complete(provider: string, messages: Message[]): Promise<ProviderResult> { switch (provider) { case "groq": return openAICompatible("groq", "https://api.groq.com/openai/v1", env("GROQ_API_KEY"), env("GROQ_MODEL") || "llama-3.3-70b-versatile", messages); case "gemini": return openAICompatible("gemini", "https://generativelanguage.googleapis.com/v1beta/openai", env("GEMINI_API_KEY"), env("GEMINI_MODEL") || "gemini-2.5-flash", messages); case "openrouter": return openAICompatible("openrouter", "https://openrouter.ai/api/v1", env("OPENROUTER_API_KEY"), env("OPENROUTER_MODEL") || "meta-llama/llama-3.3-70b-instruct:free", messages); case "cloudflare": { const account = env("CLOUDFLARE_ACCOUNT_ID"); const token = env("CLOUDFLARE_API_TOKEN"); if (!account) throw new Error("missing CLOUDFLARE_ACCOUNT_ID"); return openAICompatible("cloudflare", `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1`, token, env("CLOUDFLARE_MODEL") || "@cf/meta/llama-3.1-8b-instruct", messages); } case "anthropic": return anthropic(messages); case "openai": return openAICompatible("openai", "https://api.openai.com/v1", env("OPENAI_API_KEY"), env("OPENAI_MODEL") || "gpt-4o-mini", messages); default: throw new Error("unknown provider"); } }
-async function openAICompatible(provider: string, baseUrl: string, apiKey: string | undefined, model: string, messages: Message[]): Promise<ProviderResult> { if (!apiKey) throw new Error("not configured"); const res = await fetch(`${baseUrl}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, max_tokens: 900 }) }); const text = await res.text(); if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 180)}`); const data = JSON.parse(text); return { provider, model, text: data.choices?.[0]?.message?.content || "" }; }
-async function anthropic(messages: Message[]): Promise<ProviderResult> { const apiKey = env("ANTHROPIC_API_KEY"); const model = env("ANTHROPIC_MODEL") || "claude-sonnet-4-6"; if (!apiKey) throw new Error("not configured"); const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n"); const convo = messages.filter((m) => m.role !== "system"); const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }, body: JSON.stringify({ model, max_tokens: 900, system, messages: convo }) }); const text = await res.text(); if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 180)}`); const data = JSON.parse(text); return { provider: "anthropic", model, text: (data.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("") }; }
-function json(payload: any, status = 200) { return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } }); }
+
+async function rpc(fn: string, args: Record<string, unknown>) {
+  const base = env("SUPABASE_URL") || env("VITE_API_URL") || "https://pdvyuepsdnpxctmagdcq.supabase.co";
+  const key = env("SUPABASE_ANON_KEY") || env("VITE_SUPABASE_ANON_KEY");
+  if (!key) throw new Error("SUPABASE_ANON_KEY or VITE_SUPABASE_ANON_KEY is not configured for Netlify Functions");
+  const res = await fetch(`${base.replace(/\/$/, "")}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+    body: JSON.stringify(args),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${fn} returned HTTP ${res.status}: ${text.slice(0, 300)}`);
+  return text ? JSON.parse(text) : {};
+}
+
+function boroughFrom(text: string) {
+  const q = text.toLowerCase();
+  if (q.includes("brooklyn")) return "Brooklyn";
+  if (q.includes("manhattan")) return "Manhattan";
+  if (q.includes("queens")) return "Queens";
+  if (q.includes("bronx")) return "Bronx";
+  if (q.includes("staten island")) return "Staten Island";
+  return null;
+}
+
+function assetFrom(text: string) {
+  const q = text.toLowerCase();
+  if (q.includes("multifamily") || q.includes("apartment")) return "Multifamily";
+  if (q.includes("office")) return "Office";
+  if (q.includes("retail")) return "Retail";
+  if (q.includes("industrial")) return "Industrial";
+  if (q.includes("hotel")) return "Hotel";
+  if (q.includes("development") || q.includes("vacant") || q.includes("land")) return "Development Site";
+  if (q.includes("mixed")) return "Mixed-Use";
+  return null;
+}
+
+function priceFrom(text: string) {
+  const m = text.match(/\$?([0-9]+(?:\.[0-9]+)?)\s*(m|million|k|thousand)?/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = String(m[2] || "").toLowerCase();
+  if (unit === "m" || unit === "million") return n * 1_000_000;
+  if (unit === "k" || unit === "thousand") return n * 1_000;
+  return n;
+}
+
+function money(value: any) {
+  const n = Number(value || 0);
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
+function json(payload: any, status = 200) {
+  return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+}
