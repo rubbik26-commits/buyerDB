@@ -1,0 +1,14 @@
+name: temporary-publish
+
+on:
+  push:
+    branches: [ACRIS]
+    paths:
+      - ".github/workflows/temporary-publish.yml"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/direct_netlify_publish.sh
