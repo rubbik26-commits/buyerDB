@@ -10,7 +10,12 @@ RESPONSE=$(jq -n --arg token "$IDENTITY" '{token:$token}' | curl -fsS -X POST \
   "https://pdvyuepsdnpxctmagdcq.supabase.co/functions/v1/github-netlify-proxy" \
   -H 'Content-Type: application/json' --data-binary @-)
 PROXY_URL=$(jq -r '.proxy_url // empty' <<<"$RESPONSE")
+export VITE_API_URL=$(jq -r '.vite_api_url // empty' <<<"$RESPONSE")
+export VITE_SUPABASE_ANON_KEY=$(jq -r '.vite_anon_key // empty' <<<"$RESPONSE")
+export VITE_USE_SUPABASE_RPC=$(jq -r '.vite_rpc_mode // empty' <<<"$RESPONSE")
 test -n "$PROXY_URL"
+test -n "$VITE_API_URL"
+test -n "$VITE_SUPABASE_ANON_KEY"
 export NETLIFY_API_URL="${PROXY_URL}/api/v1"
 export NETLIFY_DEPLOY_SOURCE="cli"
 
