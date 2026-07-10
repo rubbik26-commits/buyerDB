@@ -1,170 +1,118 @@
 # Skyline Deal Intelligence
 
-A production system that turns a static NYC commercial-real-estate deal artifact into a
-living application: scrapers refresh the dataset on a schedule, a FastAPI backend serves
-it (and proxies every AI call so no key ever reaches the browser), and an in-app agent
-answers deal questions — "who's the best buyer for this?", "what's this owner's phone
-number?", "when did we last contact them?" — as SQL over Postgres, narrated by whichever
-of six providers is up and within quota.
+Skyline Deal Intelligence is a live NYC commercial-real-estate prospecting and buyer-matching system built from the verified master blueprint.
 
-```
-frontend/  React 18 + Vite (static) ── the four tabs, deployable to Vercel/Netlify
-backend/   FastAPI ─────────────────── /api/deals /buyers /leaderboards /agent /uploads /review
-worker/    the proven Python pipeline ─ scrapers + amount-gated merges, on a schedule
-shared/    normalize.py ────────────── ONE implementation of every invariant, imported by both
-database/  numbered SQL migrations
-scripts/   CSV → Postgres migration + assertions
-```
+## Production topology
 
-> **Repository layout:** in this repo the application lives in the `skyline/`
-> subfolder — `cd skyline` before running any command below. The GitHub Actions
-> workflows live at the repo root (`.github/workflows/`) and are already
-> path-adjusted for this nesting.
->
-> **Consolidated source of truth (2026-07-09):** `rubbik26-commits/buyerDB` is
-> now the unified repository for the Buyer Intelligence / Deal Intelligence app.
-> The older `rubbik26-commits/buyers` repo is treated as legacy source material.
-> Netlify project `buyerdb` must be linked to this repo on branch `ACRIS`; see
-> `CONSOLIDATION.md` and `architecture/SOP-deploy-links.md` before deploying.
->
-> **Current production topology (2026-07-06, decisions D-008/D-010):**
-> Netlify hosts the static frontend at **buyerdb.netlify.app**, built in **RPC
-> mode** — the bundle talks straight to Supabase PostgREST (`api_*` functions,
-> migration 004) with the public anon key, so the data tabs need **no separate
-> backend**. Postgres runs on Supabase (apply `database/migrations/001–009`,
-> then load the CSV with `scripts/migrate_csv.py`). The daily refresh is
-> **Supabase-native**: pg_cron fires the edge functions in
-> `skyline/supabase/functions/`, which write through `sync_upsert_deals()` —
-> the single SQL write path that enforces every invariant. See
-> `architecture/SOP-daily-refresh.md`.
->
-> Optional extras: the FastAPI backend (Render/Railway via `render.yaml`,
-> `.env` from `skyline/.env.example`) enables uploads, entity merges, and the
-> AI Deal Desk; the GitHub-Actions worker crons are a **legacy fallback**
-> scraper path, disabled unless the `ENABLE_LEGACY_WORKER` repo variable is
-> `true`.
-
-Why a backend is mandatory (not a preference): browsers can't run cron, a client bundle
-can't hold provider/scraper keys, the artifact's Anthropic call only works behind Claude.ai's
-proxy, and the dataset is already >1 MB and grows daily. All four are structural.
-
-## The invariants (encoded, not hoped for)
-
-- **Amount gate** — an ACRIS-sourced party is only attached when the deed amount is within
-  3% of the deal price (or, for no-price deals, the deed is within 60 days). This killed a
-  documented 34/34 wrong-party failure. It lives in one Python write path **and** as a
-  Postgres CHECK (`acris_requires_gate`): an ungated ACRIS party row physically cannot exist.
-- **No residential** — condos, co-ops, single-family and 1–2 family are rejected by a DB CHECK
-  and by a building-class gate in the merge path (the hole that once admitted 30 rows).
-- **Ledgers are durable tables**, not pickle files: `fetch_ledger` (discovery dedupe),
-  `exclusion_ledger` (consulted on every merge), `rolling_ledger`.
-- **Never overwrite non-null; conflicts are flagged, never resolved** (`review_queue`).
-
-## Quick start (local)
-
-Prereqs: Python 3.12, Node 18+, PostgreSQL 16.
-
-```bash
-cd skyline
-
-# 1. database
-createdb skyline
-psql skyline -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
-export DATABASE_URL=postgresql://localhost/skyline
-for f in database/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
-
-# 2. load the canonical dataset (+ exclusion ledger) and verify
-pip install -r requirements.txt
-python scripts/migrate_csv.py NEW_YORK_CLOSED_ENRICHED_v8.csv exclusion_ledger_additions_2026-07-02.csv
-python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv     # must print ALL ASSERTIONS PASSED
-
-# 3. backend
-cp .env.example .env          # add provider keys as available
-uvicorn backend.app.main:app --reload      # http://localhost:8000
-
-# 4. frontend
-cd frontend && cp .env.example .env         # VITE_API_URL=http://localhost:8000
-npm install && npm run dev                  # http://localhost:5173
+```text
+buyerdb.netlify.app
+  React/Vite frontend
+  Netlify Functions: SQL-first AI agent, scraper control plane
+  Netlify scheduled/background functions: long-running scraper orchestration
+        |
+        v
+Supabase project pdvyuepsdnpxctmagdcq
+  canonical sbi_* tables
+  durable fetch/exclusion/rolling ledgers
+  review queue + scraper run audit
+  source-safe RPC write path
+  ACRIS / Traded / DOS Edge Functions
 ```
 
-Without any AI key the four data tabs work fully; the Deal Desk returns an honest
-"no provider configured" message (never a fabricated answer).
+GitHub stores and tests the source. It does **not** execute production scraper jobs.
 
-## Tests
+## Implemented scraper train
 
-```bash
-cd skyline
-python -m pytest worker/test_store.py backend/tests worker/test_run_incremental.py -q
-python scripts/assert_migration.py NEW_YORK_CLOSED_ENRICHED_v8.csv
-cd frontend && npm run build      # production build; dist contains only public frontend env
+- **ACRIS fresh window** — deed masters, legals, parties, PLUTO classification, $1M floor, residential/condo rejection, BBL/provenance, amount-gated parties.
+- **Traded** — New York listing pages plus NY-scoped sitemap discovery, durable fetch dispositions, challenge detection, structured party extraction with title fallback, server-side ScraperAPI transport.
+- **Crexi** — configured Apify actor/dataset ingestion; active listings remain explicitly labeled as listing intelligence rather than closed-sale facts; broker contacts retain source provenance.
+- **Rolling Sales** — fills units/square footage only when all matching city rows agree; R classes are ignored; >20% conflicts are reviewed and never overwrite verified values.
+- **Phase 2 ACRIS lag closer** — address → legals → deed masters → party details; priced rows require deed amount within 3% and ≤400 days; no-price rows use the unique-deed path and the final write remains amount-gated.
+- **NYS DOS** — entity mailing/key-person enrichment with registered-agent-mill filtering.
+
+Scheduled Netlify dispatches:
+
+- ACRIS: `17 13 * * *`
+- Traded: `47 13 * * *`
+- Rolling Sales: `27 14 * * *`
+- Crexi: `17 15 * * *`
+- Weekly ACRIS party lag + DOS: `43 11 * * 0`
+
+Every manual or scheduled request creates a durable `sbi_source_runs` row before execution. The Scrapers tab dispatches the real server-side background job and shows its counters/errors.
+
+## Database invariants
+
+- No condos, co-ops, single-family, two-family, or 1–2 family rows.
+- Every merge consults `sbi_exclusion_ledger`.
+- Discovery checkpoints live in `sbi_fetch_ledger`; Rolling completion lives in `sbi_rolling_ledger`.
+- ACRIS parties physically require `amount_gate_passed=true`, a verified deed amount, and a provenance reference.
+- Existing non-null facts are never silently replaced. Source disagreements create review rows.
+- Duplicate checks use ACRIS document ID/source key first, then property + price + date.
+
+## Deal Desk
+
+`/api/agent` is SQL-first:
+
+1. Deterministic intent extraction handles the common broker questions without an LLM.
+2. A configured fast provider can plan long-tail questions into one allowlisted tool.
+3. The selected Supabase RPC executes against real rows.
+4. A quality provider may narrate those rows; deterministic narration remains available if every provider is unavailable.
+
+Named tools include contact lookup, latest interaction, similar-buyer scoring, buyer leaderboard, entity history, similar sellers, contact gaps, recent changes, and recent deals.
+
+The similar-buyer tool ports the artifact’s scoring concept into SQL: asset, borough, price, keyword, recurrence, and SPV-discount factors. Contact-sensitive results are never sent through Gemini. Every provider attempt is recorded in `sbi_ai_logs`; the answer never invents a phone, email, owner, buyer, price, or interaction.
+
+Providers supported through Netlify environment variables:
+
+- Groq
+- Gemini
+- OpenRouter
+- Cloudflare Workers AI
+- Anthropic
+- OpenAI
+
+## Required production environment
+
+Frontend-safe build variables:
+
+- `VITE_API_URL`
+- `VITE_USE_SUPABASE_RPC=true`
+- `VITE_SUPABASE_ANON_KEY`
+
+Netlify Functions/runtime:
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY` or `SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SERVICE_KEY`
+- `SCRAPER_TRIGGER_SECRET`, `SYNC_SECRET`, or `CRON_SECRET`
+- `SOCRATA_APP_TOKEN`
+- `SCRAPERAPI_KEY`
+- `APIFY_TOKEN`
+- `APIFY_CREXI_ACTOR`
+- AI provider keys and `AI_PROVIDER_ORDER` / `AI_QUALITY_PROVIDER`
+
+`/api/runtime-health` reports presence booleans only; it never exposes values.
+
+## Repository layout
+
+```text
+skyline/frontend/                  React/Vite app
+skyline/frontend/netlify/functions Netlify API, background, and scheduled functions
+skyline/frontend/netlify/lib/      scraper orchestration/runtime libraries
+skyline/supabase/functions/        source-specific Supabase Edge Functions
+skyline/database/migrations/       reproducible SBI schema/RPC migrations
+skyline/worker/                    verified original Python pipeline and tests
+skyline/backend/                   FastAPI reference implementation and provider/tool tests
 ```
 
-## The AI agent
+## CI
 
-Structured data → SQL-first tool-use, not vector search. "Phone for owner X" is a JOIN, not
-a similarity guess. Nine named tools (`lookup_contact`, `find_similar_buyers` — the artifact's
-`rankCandidates` scoring in SQL, `buyer_leaderboard`, `last_interaction`, `entity_history`,
-`missing_contact_report`, `seller_owners_of_similar`, `recent_changes`) plus a guarded
-`run_readonly_sql` escape hatch (SELECT-only, allowlisted tables, auto-LIMIT, 5s timeout).
-Two stages: a fast lane plans the tool + arguments, a quality lane narrates the rows and cites
-them. Contact values render only from `contacts` rows — the model never invents one.
+`.github/workflows/ci.yml` is test-only. It:
 
-## Providers (verified 2026-07-02; re-verify before relying on limits)
+- loads the original worker schema into a fresh PostgreSQL 16 instance,
+- migrates/asserts the canonical CSV,
+- runs the proven pipeline and backend tests,
+- builds the frontend and scans `dist/` for server secrets,
+- verifies live Supabase health and the Brooklyn multifamily buyer recommendation query.
 
-| Provider | Free tier | Role |
-|---|---|---|
-| Groq | ~30 RPM, 1K–14.4K RPD | primary tool lane |
-| Gemini | Flash only, ~10–15 RPM (may train on prompts — no contact data) | secondary |
-| OpenRouter | 50 RPD free, 1,000/day after one-time $10 | breadth |
-| Cloudflare | 10,000 neurons/day | utility |
-| Anthropic | no free tier (paid) | quality lane |
-| OpenAI | no permanent free tier | optional quality |
-
-The router (`AI_PROVIDER_ORDER`, `AI_QUALITY_PROVIDER`) fails over on 429/5xx/timeout/network,
-pre-emptively skips a provider whose daily budget is spent, and logs every attempt
-(`provider`, `latency`, `fallback_from`, `status`) to `ai_logs`.
-
-## Scheduling
-
-**Live path (Supabase-native, D-008/D-010):** pg_cron job `skyline-sync-daily`
-(07:40 UTC) plus the dealflow train fire the edge functions in
-`skyline/supabase/functions/` (acris-v2, traded-daily, crexi-run/-ingest,
-dos-enrich), which write through `sync_upsert_deals()`. Run state lands in
-`sync_state` and every function returns a full counters summary. Source of
-truth: `architecture/SOP-daily-refresh.md`.
-
-**Legacy fallback (GitHub Actions, disabled by default):** gated on the
-`ENABLE_LEGACY_WORKER` repo variable; `workflow_dispatch` always works.
-
-- `daily-incremental.yml` (`17 13 * * *`): traded discovery minus the fetch ledger → gated
-  merge → fresh ACRIS window → rolling batch → keep-alive commit (defeats the 60-day
-  schedule auto-disable) → fails loudly with a webhook alert.
-- `weekly-enrichment.yml` (`43 11 * * 0`): phase2 match → amount-gated apply; closes the
-  7–8 week ACRIS party-recording lag as the window rolls.
-- `ci.yml` (always on): spins a fresh Postgres, applies migrations, runs the full test
-  suite, builds the frontend, and fails if any secret pattern appears in `dist/`.
-
-curl_cffi bypasses traded.co's Cloudflare for free on the Python runner; a JS/Deno host would
-need ScraperAPI (~11 credits per protected page). That's why the fallback worker stays Python
-(the live traded-daily edge function spends ScraperAPI credits instead).
-
-## Deploy
-
-Frontend → Netlify (static, RPC mode; `netlify.toml` at repo root — production is
-buyerdb.netlify.app, with a GitHub Pages mirror via `deploy-frontend.yml`). Netlify must be
-linked to `rubbik26-commits/buyerDB`, branch `ACRIS`, with build base `skyline/frontend`.
-Postgres → Supabase (Pro recommended for backups and no idle-pause). Optional:
-Backend → Render/Railway (FastAPI via `render.yaml`; then point `VITE_API_URL` at it),
-legacy worker → GitHub Actions (set `DATABASE_URL` secret + `ENABLE_LEGACY_WORKER=true`).
-Estimated cost: $0 prototype → ~$32–42/mo production.
-
-## Acceptance evidence (this build)
-
-- **A — scheduled ingest + ledger dedupe:** `worker/test_run_incremental.py` — a run merges a
-  new deal, the exclusion ledger blocks a residential one, the re-run dedupes discovery via the
-  fetch ledger. PASS.
-- **B — phone from an uploaded CSV, with provenance:** upload → entity resolution → `lookup_contact`
-  returns the uploaded number with `source=upload:<id>`, linked to the buyer's real deal history.
-  Verified end-to-end.
-- **C — provider failover:** `backend/tests/test_provider_router.py` — kill the primary, the
-  request succeeds via fallback, `fallback_from` is logged. 6/6 PASS.
+Netlify’s native Git integration handles preview and production builds. Broken token-dependent GitHub deploy jobs and all GitHub scraper-worker workflows were removed.
