@@ -1,19 +1,42 @@
-import React, { useState } from "react";
-import { api, num, IS_RPC_MODE } from "../api/client.js";
-import { Loading, ErrorBanner } from "../components/ui.jsx";
+import React, { useCallback, useEffect, useState } from "react";
+import { api, num, shortDate, IS_RPC_MODE } from "../api/client.js";
+import { Empty, Loading, ErrorBanner, Pill } from "../components/ui.jsx";
 
-const FIELDS = ["", "entity_name", "person_name", "phone", "email", "mailing_address", "title", "last_contact_date", "interaction_notes", "channel"];
+const FIELDS = [
+  "", "entity_name", "person_name", "role", "title", "phone", "email", "website",
+  "mailing_address", "property_address", "borough", "asset_type", "last_contact_date",
+  "interaction_notes", "channel",
+];
 
 export default function Uploads({ refreshMeta }) {
-  const [stage, setStage] = useState("drop"); // drop | map | done
+  const [stage, setStage] = useState("drop");
   const [over, setOver] = useState(false);
   const [staged, setStaged] = useState(null);
   const [mapping, setMapping] = useState({});
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [history, setHistory] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyErr, setHistoryErr] = useState(null);
 
   const hasEntityMapping = Object.values(mapping || {}).includes("entity_name");
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryErr(null);
+    try {
+      const response = await api.uploads();
+      if (response?.error) throw new Error(response.error);
+      setHistory(response?.uploads || []);
+    } catch (error) {
+      setHistoryErr(error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
 
   async function handleFile(file) {
     if (!file) return;
@@ -32,6 +55,7 @@ export default function Uploads({ refreshMeta }) {
       setStaged(res);
       setMapping(res.proposed_mapping || {});
       setStage("map");
+      await loadHistory();
     } catch (e) { setErr(e); }
     finally { setBusy(false); }
   }
@@ -47,7 +71,8 @@ export default function Uploads({ refreshMeta }) {
       if (res.error) throw new Error(res.error);
       setResult({ ...res, stats: res.stats || {} });
       setStage("done");
-      refreshMeta && refreshMeta();
+      await loadHistory();
+      refreshMeta && await refreshMeta();
     } catch (e) { setErr(e); }
     finally { setBusy(false); }
   }
@@ -59,7 +84,7 @@ export default function Uploads({ refreshMeta }) {
       <div className="view-head">
         <div className="eyebrow">Your book, linked to the market</div>
         <h1>Contacts</h1>
-        <p>Drop a CSV of owners, phones, emails, and call history. The desk normalizes each name, links it to the buyers and sellers already in the dataset, and holds anything ambiguous for your review — nothing is merged blindly.</p>
+        <p>Upload owners, decision-makers, contact details, property context, and contact history. Exact names and confirmed aliases link automatically. Fuzzy candidates stop in Review so nothing ambiguous is merged blindly.</p>
       </div>
 
       <ErrorBanner error={err} />
@@ -74,7 +99,7 @@ export default function Uploads({ refreshMeta }) {
             style={{ display: "block", cursor: "pointer" }}
           >
             <div className="big">Drop a contacts file here</div>
-            <div className="small">CSV{IS_RPC_MODE ? "" : " or XLSX"} · columns like Owner, Phone, Email, Address, Last Contacted, Notes</div>
+            <div className="small">CSV{IS_RPC_MODE ? "" : " or XLSX"} · Owner, Contact, Role, Phone, Email, Website, Mailing Address, Property, Borough, Asset Type, Last Contact, Notes</div>
             <div style={{ marginTop: 14 }}><span className="btn brass">Choose file</span></div>
             <input type="file" accept={IS_RPC_MODE ? ".csv" : ".csv,.xlsx,.xls"} style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
           </label>
@@ -87,11 +112,11 @@ export default function Uploads({ refreshMeta }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
             <div>
               <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>{staged.row_count} rows</strong>
-              <span style={{ color: "var(--tx-dim)", marginLeft: 10, fontSize: 13 }}>confirm how columns map, then import</span>
+              <span style={{ color: "var(--tx-dim)", marginLeft: 10, fontSize: 13 }}>confirm how columns map, then resolve</span>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn ghost" onClick={reset}>Cancel</button>
-              <button className="btn brass" onClick={resolve} disabled={busy || !hasEntityMapping}>{busy ? "Importing…" : "Resolve & import"}</button>
+              <button className="btn brass" onClick={resolve} disabled={busy || !hasEntityMapping}>{busy ? "Resolving…" : "Resolve & import"}</button>
             </div>
           </div>
           <table className="maptable">
@@ -113,7 +138,7 @@ export default function Uploads({ refreshMeta }) {
             </tbody>
           </table>
           <div style={{ marginTop: 10, fontSize: 12.5, color: hasEntityMapping ? "var(--tx-mute)" : "var(--danger)" }}>
-            An <code>entity_name</code> column is required — it links the contact to a buyer or seller.
+            <code>entity_name</code> is required. Property, borough, and asset type improve candidate scoring but never force an automatic fuzzy merge.
           </div>
         </div>
       )}
@@ -121,26 +146,77 @@ export default function Uploads({ refreshMeta }) {
       {stage === "done" && result && (
         <div className="panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-            <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>Import complete</strong>
+            <strong style={{ fontFamily: "var(--display)", fontSize: 18 }}>Resolution complete</strong>
             <button className="btn brass" onClick={reset}>Upload another</button>
           </div>
           <div className="statgrid">
-            <Stat n={result.stats.auto_matched} l="linked to existing" />
-            <Stat n={result.stats.new_entity} l="new owners" />
+            <Stat n={result.stats.auto_matched} l="exact-name links" />
+            <Stat n={result.stats.alias_matched} l="confirmed-alias links" />
+            <Stat n={result.stats.new_entity} l="new entities" />
             <Stat n={result.stats.needs_review} l="sent to review" />
-            <Stat n={result.stats.contacts_created} l="contacts saved" />
+            <Stat n={result.stats.contacts_created} l="contacts created" />
+            <Stat n={result.stats.contacts_updated} l="contacts updated" />
             <Stat n={result.stats.interactions_created} l="interactions logged" />
-            <Stat n={result.stats.skipped_no_name} l="skipped (no name)" />
+            <Stat n={result.stats.skipped_no_name} l="rejected names" />
           </div>
           {result.stats.needs_review > 0 && (
             <div className="banner warn" style={{ marginTop: 16 }}>
-              {result.stats.needs_review} row(s) matched an existing owner only fuzzily. Open <strong>Review</strong> to confirm or reject each — they won't be merged until you do.
+              {result.stats.needs_review} row(s) have plausible fuzzy matches. Open <strong>Review</strong> to select the correct entity, create a new entity, or reject the row. No contact is imported until that decision is made.
             </div>
           )}
         </div>
       )}
+
+      <UploadHistory uploads={history} loading={historyLoading} error={historyErr} onRefresh={loadHistory} />
     </div>
   );
+}
+
+function UploadHistory({ uploads, loading, error, onRefresh }) {
+  return (
+    <section className="panel" style={{ marginTop: 20 }}>
+      <div className="panelhead">
+        <div>
+          <h2>Upload history</h2>
+          <p>Every staged file remains auditable with its mapping and row-level outcomes.</p>
+        </div>
+        <button className="btn ghost sm" onClick={onRefresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      <ErrorBanner error={error} />
+      {loading && !uploads && <Loading label="Loading upload history…" />}
+      {uploads && uploads.length === 0 && <Empty title="No uploads yet." hint="The first staged contacts file will appear here." />}
+      {uploads && uploads.length > 0 && (
+        <div className="tablewrap">
+          <table className="deals">
+            <thead><tr><th>File</th><th>Status</th><th>Created</th><th className="num">Rows</th><th className="num">Imported</th><th className="num">Review</th><th className="num">Rejected</th><th>Mapped fields</th></tr></thead>
+            <tbody>{uploads.map((upload) => (
+              <tr key={upload.upload_id} style={{ cursor: "default" }}>
+                <td><span className="addr">{upload.filename || "Untitled upload"}</span><div style={{ color: "var(--tx-mute)", fontSize: 11 }}>{upload.user_id || "broker"}</div></td>
+                <td><Pill kind={uploadStatusKind(upload.status)}>{String(upload.status || "unknown").replaceAll("_", " ")}</Pill></td>
+                <td className="money">{shortDate(upload.created_at)}</td>
+                <td className="num">{num(upload.row_count ?? upload.staged_rows ?? 0)}</td>
+                <td className="num">{num(upload.imported_rows || 0)}</td>
+                <td className="num">{upload.open_review_items > 0 ? <Pill kind="review">{num(upload.open_review_items)} open</Pill> : num(upload.needs_review_rows || 0)}</td>
+                <td className="num">{num(upload.rejected_rows || 0)}</td>
+                <td style={{ maxWidth: 280, color: "var(--tx-dim)", fontSize: 12 }}>{mappedFields(upload.column_mapping)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function uploadStatusKind(status) {
+  if (status === "imported") return "ok";
+  if (status === "review_pending" || status === "failed") return "review";
+  return "src";
+}
+
+function mappedFields(mapping) {
+  const fields = [...new Set(Object.values(mapping || {}).filter(Boolean))];
+  return fields.length ? fields.join(" · ") : "—";
 }
 
 function Stat({ n, l }) {
