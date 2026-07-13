@@ -1,0 +1,55 @@
+name: upload-resolution-contract
+
+on:
+  push:
+    branches: [ACRIS]
+  pull_request:
+    branches: [ACRIS]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upload-resolution-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: skyline
+          POSTGRES_PASSWORD: skyline_dev
+          POSTGRES_DB: skyline_upload_resolution
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://skyline:skyline_dev@localhost:5432/skyline_upload_resolution
+    defaults:
+      run:
+        working-directory: skyline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: skyline/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Apply isolated SBI prerequisites and production migrations
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/001b_sbi_base_schema.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/002_workflow_os.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/tests/sql/upload_resolution_prerequisites.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/027z_upload_resolution_helpers.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/028_upload_entity_resolution.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/029_upload_resolution_fixes.sql
+      - name: Prove exact, alias, fuzzy-review, contact and interaction behavior
+        run: python -m pytest backend/tests/test_upload_resolution_sql.py -q
