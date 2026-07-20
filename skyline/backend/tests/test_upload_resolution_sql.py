@@ -1,6 +1,8 @@
 """Database proof for the blueprint upload/entity-resolution workflow.
 
 The test runs inside one transaction and rolls it back, so it proves exact matching,
+fuzzy review, alias confirmation, phone/date normalization, and rematch dedupe without
+leaving fixture rows behind.
 fuzzy review, alias confirmation, phone/date normalization, rematch dedupe, and the
 broker-facing upload audit history without leaving fixture rows behind.
 """
