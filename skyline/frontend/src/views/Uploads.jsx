@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { api, num, IS_RPC_MODE } from "../api/client.js";
-import { Loading, ErrorBanner } from "../components/ui.jsx";
+import React, { useCallback, useEffect, useState } from "react";
+import { api, num, shortDate, IS_RPC_MODE } from "../api/client.js";
+import { Empty, Loading, ErrorBanner, Pill } from "../components/ui.jsx";
 
 const FIELDS = [
   "", "entity_name", "person_name", "role", "title", "phone", "email", "website",
@@ -16,8 +16,27 @@ export default function Uploads({ refreshMeta }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [history, setHistory] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyErr, setHistoryErr] = useState(null);
 
   const hasEntityMapping = Object.values(mapping || {}).includes("entity_name");
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryErr(null);
+    try {
+      const response = await api.uploads();
+      if (response?.error) throw new Error(response.error);
+      setHistory(response?.uploads || []);
+    } catch (error) {
+      setHistoryErr(error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
 
   async function handleFile(file) {
     if (!file) return;
@@ -36,6 +55,7 @@ export default function Uploads({ refreshMeta }) {
       setStaged(res);
       setMapping(res.proposed_mapping || {});
       setStage("map");
+      await loadHistory();
     } catch (e) { setErr(e); }
     finally { setBusy(false); }
   }
@@ -51,7 +71,8 @@ export default function Uploads({ refreshMeta }) {
       if (res.error) throw new Error(res.error);
       setResult({ ...res, stats: res.stats || {} });
       setStage("done");
-      refreshMeta && refreshMeta();
+      await loadHistory();
+      refreshMeta && await refreshMeta();
     } catch (e) { setErr(e); }
     finally { setBusy(false); }
   }
@@ -145,8 +166,57 @@ export default function Uploads({ refreshMeta }) {
           )}
         </div>
       )}
+
+      <UploadHistory uploads={history} loading={historyLoading} error={historyErr} onRefresh={loadHistory} />
     </div>
   );
+}
+
+function UploadHistory({ uploads, loading, error, onRefresh }) {
+  return (
+    <section className="panel" style={{ marginTop: 20 }}>
+      <div className="panelhead">
+        <div>
+          <h2>Upload history</h2>
+          <p>Every staged file remains auditable with its mapping and row-level outcomes.</p>
+        </div>
+        <button className="btn ghost sm" onClick={onRefresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      <ErrorBanner error={error} />
+      {loading && !uploads && <Loading label="Loading upload history…" />}
+      {uploads && uploads.length === 0 && <Empty title="No uploads yet." hint="The first staged contacts file will appear here." />}
+      {uploads && uploads.length > 0 && (
+        <div className="tablewrap">
+          <table className="deals">
+            <thead><tr><th>File</th><th>Status</th><th>Created</th><th className="num">Rows</th><th className="num">Imported</th><th className="num">Review</th><th className="num">Rejected</th><th>Mapped fields</th></tr></thead>
+            <tbody>{uploads.map((upload) => (
+              <tr key={upload.upload_id} style={{ cursor: "default" }}>
+                <td><span className="addr">{upload.filename || "Untitled upload"}</span><div style={{ color: "var(--tx-mute)", fontSize: 11 }}>{upload.user_id || "broker"}</div></td>
+                <td><Pill kind={uploadStatusKind(upload.status)}>{String(upload.status || "unknown").replaceAll("_", " ")}</Pill></td>
+                <td className="money">{shortDate(upload.created_at)}</td>
+                <td className="num">{num(upload.row_count ?? upload.staged_rows ?? 0)}</td>
+                <td className="num">{num(upload.imported_rows || 0)}</td>
+                <td className="num">{upload.open_review_items > 0 ? <Pill kind="review">{num(upload.open_review_items)} open</Pill> : num(upload.needs_review_rows || 0)}</td>
+                <td className="num">{num(upload.rejected_rows || 0)}</td>
+                <td style={{ maxWidth: 280, color: "var(--tx-dim)", fontSize: 12 }}>{mappedFields(upload.column_mapping)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function uploadStatusKind(status) {
+  if (status === "imported") return "ok";
+  if (status === "review_pending" || status === "failed") return "review";
+  return "src";
+}
+
+function mappedFields(mapping) {
+  const fields = [...new Set(Object.values(mapping || {}).filter(Boolean))];
+  return fields.length ? fields.join(" · ") : "—";
 }
 
 function Stat({ n, l }) {

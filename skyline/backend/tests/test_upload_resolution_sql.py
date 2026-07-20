@@ -3,6 +3,8 @@
 The test runs inside one transaction and rolls it back, so it proves exact matching,
 fuzzy review, alias confirmation, phone/date normalization, and rematch dedupe without
 leaving fixture rows behind.
+fuzzy review, alias confirmation, phone/date normalization, rematch dedupe, and the
+broker-facing upload audit history without leaving fixture rows behind.
 """
 import json
 import os
@@ -170,6 +172,18 @@ def test_upload_resolution_requires_review_then_rematches_by_name_and_alias():
         assert rematched["stats"]["needs_review"] == 0
         assert rematched["stats"]["contacts_created"] == 0
         assert rematched["stats"]["contacts_updated"] == 2
+
+        history = _one(cur, "select public.api_uploads_list()")
+        first_history = next(item for item in history["uploads"] if item["upload_id"] == str(upload_id))
+        assert first_history["status"] == "imported"
+        assert first_history["row_count"] == 2
+        assert first_history["staged_rows"] == 2
+        assert first_history["imported_rows"] == 2
+        assert first_history["needs_review_rows"] == 0
+        assert first_history["open_review_items"] == 0
+        assert first_history["rejected_rows"] == 0
+        assert first_history["row_status_counts"] == {"imported": 2}
+        assert first_history["column_mapping"]["Owner"] == "entity_name"
     finally:
         conn.rollback()
         cur.close()
