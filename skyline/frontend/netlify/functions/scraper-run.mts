@@ -1,11 +1,14 @@
 import type { Config, Context } from "@netlify/functions";
 import { createRequestedRun, triggerSecret } from "../lib/orchestrator.mts";
-import { getEnv, runtimeRpc } from "../lib/supabase.mts";
+import { getEnv, hasRuntimeCredential, runtimeRpc } from "../lib/supabase.mts";
 
 const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
 const JOBS = new Set(["traded_refresh", "acris_refresh", "crexi_refresh", "property_owner_refresh", "rolling_sales", "phase2_enrichment", "dos_enrich", "full_refresh"]);
 
 async function dispatch(job: string, userId: string, options: Record<string, unknown>) {
+  if (!hasRuntimeCredential()) {
+    throw new Error("SCRAPER_TRIGGER_SECRET is not configured for the Netlify and Supabase scraper runtimes.");
+  }
   const recent = await runtimeRpc("sbi_runtime_active_run", { p_job: job, p_minutes: 30 });
   if (recent?.run_id) return { ...recent, deduplicated: true };
   const requested = await createRequestedRun(job, userId, options);
@@ -40,7 +43,9 @@ export default async (req: Request, _context: Context) => {
     for (const job of jobs) runs.push(await dispatch(job, userId, options));
     return json({ status: "dispatched", requested_job: requestedJob, runs }, 202);
   } catch (error: any) {
-    return json({ error: "scraper_dispatch_failed", detail: error?.message || String(error) }, 500);
+    const detail = error?.message || String(error);
+    const status = detail.includes("SCRAPER_TRIGGER_SECRET") || detail.includes("runtime credential") ? 503 : 500;
+    return json({ error: "scraper_dispatch_failed", detail }, status);
   }
 };
 
