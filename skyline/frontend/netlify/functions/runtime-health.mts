@@ -19,6 +19,8 @@ export default async (_req: Request, _context: Context) => new Response(JSON.str
   },
   scraper: {
     scheduler_credential: present("SCRAPER_TRIGGER_SECRET", "SYNC_SECRET", "CRON_SECRET"),
+    runtime_credential: present("SCRAPER_TRIGGER_SECRET", "SYNC_SECRET", "CRON_SECRET"),
+    jwt_secret_is_runtime_credential: false,
     socrata: present("SOCRATA_APP_TOKEN"),
     scraperapi: present("SCRAPERAPI_KEY"),
     apify_token: present("APIFY_TOKEN"),

@@ -6,7 +6,7 @@ const env = netlifyEnv;
 export function config() {
   const url = effectiveSupabaseUrl();
   const key = effectiveSupabasePublishableKey();
-  const runtimeSecret = env("SCRAPER_TRIGGER_SECRET") || env("SYNC_SECRET") || env("CRON_SECRET") || env("SUPABASE_JWT_SECRET");
+  const runtimeSecret = env("SCRAPER_TRIGGER_SECRET") || env("SYNC_SECRET") || env("CRON_SECRET");
   if (!url || !key) throw new Error("The Supabase URL/public key is not configured for the Netlify runtime.");
   return { url, key, runtimeSecret };
 }
@@ -25,13 +25,15 @@ async function rawRpc(name: string, body: Json = {}) {
 
 export async function runtimeRpc(name: string, body: Json = {}) {
   const { runtimeSecret } = config();
-  if (!runtimeSecret) throw new Error("The Netlify scraper runtime credential is not configured.");
+  if (!runtimeSecret) {
+    throw new Error("The scraper runtime credential is not configured. Set SCRAPER_TRIGGER_SECRET to the credential configured for the Supabase runtime RPCs; SUPABASE_JWT_SECRET is not a runtime credential.");
+  }
   return rawRpc(name, { p_secret: runtimeSecret, ...body });
 }
 
 export async function rpc(name: string, body: Json = {}) {
   if (name === "api_request_scrape") {
-    return runtimeRpc("sbi_runtime_request_run", { p_job: body.job, p_user_id: body.user_id, p_options: body.options || {} });
+    return rawRpc("api_request_scrape", { job: body.job, user_id: body.user_id, options: body.options || {} });
   }
   if (name === "sync_upsert_deals") return runtimeRpc("sbi_runtime_sync", { p_rows: body.rows || [] });
   if (name === "upsert_broker_contacts") return runtimeRpc("sbi_runtime_broker_contacts", { p_rows: body.rows || [] });
@@ -70,3 +72,5 @@ export async function invokeEdge(name: string, body: Json, extraHeaders: Record<
 }
 
 export function getEnv(name: string) { return env(name); }
+
+export function hasRuntimeCredential() { return Boolean(config().runtimeSecret); }

@@ -2,7 +2,7 @@ const DEFAULT_SUPABASE_URL = "https://pdvyuepsdnpxctmagdcq.supabase.co";
 const DEFAULT_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_UjrNaspF-2DWK9RFYmX1Zw_1Ju8nT2w";
 
 export function netlifyEnv(name: string) {
-  return (globalThis as any).Netlify?.env?.get?.(name) || "";
+  return (globalThis as any).Netlify?.env?.get?.(name) || (globalThis as any).process?.env?.[name] || "";
 }
 
 export function effectiveSupabaseUrl() {
